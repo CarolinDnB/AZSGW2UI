@@ -1,8 +1,8 @@
 ## Interface: 11200
 ## Title: AZS - Guild Wars 2 UI
 ## Notes: A Guild Wars 2 style interface for Azeroth Survivors (health orb, skill bar, minimap, damage numbers, trackers, meter, hero panel).
-## Author: generated
-## Version: 1.6
+## Author: CarolinDnB
+## Version: 1.8.0
 ## SavedVariables: AZSGW2DB
 Core.lua
 Orb.lua

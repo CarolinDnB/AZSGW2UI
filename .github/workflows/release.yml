@@ -1,0 +1,109 @@
+name: Release
+
+# Runs by hand: Actions tab > Release > Run workflow, then type the new version (three numbers, no "v", e.g. 1.2.0).
+# It sets "## Version:" in the .toc, tags the release as v<version>, builds <ADDON>.zip and publishes it as a GitHub release.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New version, three numbers without a v (for example 1.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write   # needed to push the version commit and the tag, and to create the release. No secrets to set up.
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  # The only line to edit: the name of your .toc file without ".toc".
+  # It is also the name of the addon folder inside the zip.
+  ADDON: AZSGW2UI
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      BRANCH: ${{ github.ref_name }}
+      REF_TYPE: ${{ github.ref_type }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the version number
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" != "branch" ]; then
+            echo "::error::Run this workflow on a branch (main), not on a tag."
+            exit 1
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::The version must be three numbers like 1.2.0, without a v in front."
+            exit 1
+          fi
+
+      - name: Check that the tag is new
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" > /dev/null 2>&1; then
+            echo "::error::The tag v${VERSION} already exists. Use a version number you have not released yet."
+            exit 1
+          fi
+
+      - name: Check the .toc file
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "${ADDON}.toc" ]; then
+            echo "::error::${ADDON}.toc is not at the top of the repository. Check the ADDON line at the top of this file."
+            exit 1
+          fi
+          if ! grep -q '^## Version:' "${ADDON}.toc"; then
+            echo "::error::${ADDON}.toc has no '## Version:' line."
+            exit 1
+          fi
+
+      - name: Set the version, commit and tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          # [^\r]* keeps a Windows line ending on that line if the file has one
+          sed -i -E "s/^## Version:[^\r]*/## Version: ${VERSION}/" "${ADDON}.toc"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- "${ADDON}.toc"; then
+            git add "${ADDON}.toc"
+            git commit -m "Release ${VERSION}"
+          fi
+          git tag -a "v${VERSION}" -m "${ADDON} ${VERSION}"
+          git push --atomic origin "HEAD:refs/heads/${BRANCH}" "refs/tags/v${VERSION}"
+
+      - name: Build the zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          # git archive honours .gitattributes: files marked export-ignore are left out
+          git archive --format=zip --prefix="${ADDON}/" --output="${ADDON}.zip" "v${VERSION}"
+          unzip -l "${ADDON}.zip"
+          if ! unzip -Z1 "${ADDON}.zip" | grep -qx "${ADDON}/${ADDON}.toc"; then
+            echo "::error::${ADDON}/${ADDON}.toc is not in the zip."
+            exit 1
+          fi
+
+      - name: Create the GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "v${VERSION}" "${ADDON}.zip" \
+            --verify-tag \
+            --title "${ADDON} v${VERSION}" \
+            --generate-notes

@@ -146,6 +146,8 @@ function G.SetOpt(key, value)
 end
 
 -- arrows: 32 rotations in arrows.tga (8 x 4 cells). rel = radians counter-clockwise from "up".
+-- the arrow is drawn in 32 steps; a texture that already shows the step is left alone
+local arrowShown = {};
 function G.SetArrow(tex, rel)
 	local tau = 6.28318531;
 	rel = rel - tau * math.floor(rel / tau);
@@ -153,6 +155,10 @@ function G.SetArrow(tex, rel)
 	if ( k >= 32 ) then
 		k = 0;
 	end
+	if ( arrowShown[tex] == k ) then
+		return;                                    -- already pointing that way
+	end
+	arrowShown[tex] = k;
 	local col, row = math.mod(k, 8), math.floor(k / 8);
 	tex:SetTexCoord(col / 8, (col + 1) / 8, row / 4, (row + 1) / 4);
 end
@@ -262,6 +268,16 @@ function G.Text(parent, size, justify, layer)
 	return fs;
 end
 
+-- SetText that skips the call when the string is the one already shown. Only for text that nothing else
+-- writes to (a fixed set of font strings, so the table stays small).
+local textShown = {};
+function G.SetText(fs, text)
+	if ( textShown[fs] ~= text ) then
+		textShown[fs] = text;
+		fs:SetText(text);
+	end
+end
+
 function G.Solid(frame, layer, r, g, b, a)
 	local t = frame:CreateTexture(nil, layer or "BACKGROUND");
 	t:SetTexture(G.WHITE);
@@ -297,6 +313,11 @@ end
 function G.EdgeColor(frame, r, g, b, a)
 	local e = frame.edges;
 	if ( not e ) then return; end
+	a = a or 1;
+	if ( e.cr == r and e.cg == g and e.cb == b and e.ca == a ) then
+		return;                                    -- already that colour: nothing to send to the game
+	end
+	e.cr, e.cg, e.cb, e.ca = r, g, b, a;
 	e.top:SetVertexColor(r, g, b, a or 1);
 	e.bottom:SetVertexColor(r, g, b, a or 1);
 	e.left:SetVertexColor(r, g, b, a or 1);
@@ -427,6 +448,10 @@ function G.NewBar(parent, w, h, r, g, b)
 	f.SetFrac = function(self, frac)
 		frac = G.Clamp(tonumber(frac) or 0, 0, 1);
 		local width = (self:GetWidth() or 0) - 2;
+		if ( self.lastFrac == frac and self.lastWidth == width ) then
+			return;                                -- the same bar as last time
+		end
+		self.lastFrac, self.lastWidth = frac, width;
 		if ( frac <= 0.002 or width <= 0 ) then
 			self.fill:Hide();
 			return;
@@ -435,6 +460,10 @@ function G.NewBar(parent, w, h, r, g, b)
 		self.fill:Show();
 	end;
 	f.SetColor = function(self, cr, cg, cb)
+		if ( self.cr == cr and self.cg == cg and self.cb == cb ) then
+			return;
+		end
+		self.cr, self.cg, self.cb = cr, cg, cb;
 		self.fill:SetVertexColor(cr, cg, cb, 1);
 	end;
 	return f;
@@ -446,7 +475,11 @@ function G.Tooltip(frame, func, anchor)
 	frame:EnableMouse(true);
 	frame:SetScript("OnEnter", function()
 		GameTooltip:SetOwner(frame, anchor or "ANCHOR_TOP");
-		func(GameTooltip);
+		local ok, err = pcall(func, GameTooltip);
+		if ( not ok and not G.tipFailed ) then
+			G.tipFailed = true;                       -- say it once; the tooltip still shows what it got so far
+			G.Print("tooltip error: " .. tostring(err));
+		end
 		GameTooltip:Show();
 	end);
 	frame:SetScript("OnLeave", function()

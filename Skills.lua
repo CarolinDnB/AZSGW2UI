@@ -152,13 +152,38 @@ local function NewSlot(size, hasCooldown, ranked)
 	return b;
 end
 
+-- These run for every slot about thirty times a second, and nearly always with the same values as the
+-- last time, so each one remembers what it drew and only talks to the game when something changed.
 local function SetRank(b, rank)
-	if ( rank and rank > 0 ) then
+	rank = rank or 0;
+	if ( b.curRank == rank ) then
+		return;
+	end
+	b.curRank = rank;
+	if ( rank > 0 ) then
 		b.keyText:SetText(tostring(rank));
 		b.chip:Show();
 	else
 		b.keyText:SetText("");
 		b.chip:Hide();
+	end
+end
+
+local function SetCdText(b, text)
+	if ( b.curCd ~= text ) then
+		b.curCd = text;
+		b.cdText:SetText(text);
+	end
+end
+
+local function SetTint(b, kind)
+	if ( b.tint ~= kind ) then
+		b.tint = kind;
+		if ( kind == "dim" ) then
+			b.icon:SetVertexColor(0.55, 0.55, 0.6, 1);
+		else
+			b.icon:SetVertexColor(1, 1, 1, 1);
+		end
 	end
 end
 
@@ -179,10 +204,11 @@ local function SetEmpty(b)
 		b.icon:SetVertexColor(0.04, 0.04, 0.05, 1);
 		b.curIcon = "empty";
 	end
-	if ( b.cd ) then
+	if ( b.cd and b.cdOn ~= false ) then
+		b.cdOn = false;
 		b.cd:Hide();
 	end
-	b.cdText:SetText("");
+	SetCdText(b, "");
 	SetRank(b, 0);
 end
 
@@ -190,41 +216,85 @@ local function SetSpell(b, entry)
 	b.entry = entry;
 	if ( b.curIcon == "empty" ) then
 		b.icon:SetVertexColor(1, 1, 1, 1);
+		b.tint = "norm";
 		b.curIcon = nil;
 	end
 	local info = G.abilityInfo[entry.key];
 	SetIcon(b, info and info.icon);
 
-	local rem = G.SpellRemaining(entry);
+	local rem = G.SpellRemaining(entry, G.skillNow);
 	local cdmax = G.Num(entry.cdmax);
 	if ( rem > 0.05 and cdmax > 0 ) then
-		local h = (b.size - 6) * G.Clamp(rem / cdmax, 0, 1);
 		if ( b.cd ) then
-			b.cd:SetHeight(math.max(1, h));
-			b.cd:Show();
+			local h = math.max(1, math.floor((b.size - 6) * G.Clamp(rem / cdmax, 0, 1) + 0.5));
+			if ( b.cdH ~= h ) then
+				b.cdH = h;
+				b.cd:SetHeight(h);
+			end
+			if ( b.cdOn ~= true ) then
+				b.cdOn = true;
+				b.cd:Show();
+			end
 		end
-		b.icon:SetVertexColor(0.55, 0.55, 0.6, 1);
-		b.cdText:SetText(G.Rem(rem));
+		SetTint(b, "dim");
+		SetCdText(b, G.Rem(rem));
 	else
-		if ( b.cd ) then
+		if ( b.cd and b.cdOn ~= false ) then
+			b.cdOn = false;
 			b.cd:Hide();
 		end
-		b.icon:SetVertexColor(1, 1, 1, 1);
-		b.cdText:SetText("");
+		SetTint(b, "norm");
+		SetCdText(b, "");
 	end
 	-- the skill's rank, where the slot number used to be
 	SetRank(b, math.floor(G.Num(entry.rank)));
 end
 
-function G.SpellRemaining(entry)
+-- "now" is the run clock when the caller already has it (the skill bar reads it once per update, not once per slot)
+function G.SpellRemaining(entry, now)
 	local base = G.cdEnd and G.cdEnd[entry.key];
 	if ( base and AZS_GetRunTime ) then
-		local t = AZS_GetRunTime();
+		local t = now or AZS_GetRunTime();
 		if ( t ) then
 			return math.max(0, base - t);
 		end
 	end
 	return G.Num(entry.cd);
+end
+
+-- the position of a spell in the spellbook, found by name (and rank when there is one): the game's own tooltip for
+-- it (description, cost, range, cast time) can be shown with SetSpell. nil when the spell is not in the book.
+local function BookIndex(name, rank)
+	if ( not ( name and GetNumSpellTabs and GetSpellTabInfo and GetSpellName ) ) then
+		return nil;
+	end
+	local last, exact = nil, nil;
+	local want = nil;
+	if ( rank and rank > 0 ) then
+		want = "Rank " .. rank;
+	end
+	for tab = 1, GetNumSpellTabs() do
+		local _, _, offset, count = GetSpellTabInfo(tab);
+		if ( offset and count ) then
+			for i = offset + 1, offset + count do
+				local n, r = GetSpellName(i, "spell");
+				if ( n == name ) then
+					last = i;
+					if ( want and r == want ) then
+						exact = i;
+					end
+				end
+			end
+		end
+	end
+	return exact or last;
+end
+
+-- "arcane_missiles" -> "Arcane Missiles", for a spell the loadout has no name for
+local function Pretty(key)
+	local t = string.gsub(tostring(key), "_", " ");
+	t = string.gsub(t, "(%a)(%a*)", function(a, rest) return string.upper(a) .. rest; end);
+	return t;
 end
 
 local function SpellTooltip(tt, b)
@@ -237,7 +307,20 @@ local function SpellTooltip(tt, b)
 		return;
 	end
 	local info = G.abilityInfo[e.key];
-	tt:AddLine((info and info.name) or tostring(e.key), G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+	local rem = G.SpellRemaining(e);
+	-- the game's own spell tooltip when the spell is in the spellbook
+	local idx = BookIndex(info and info.name, math.floor(G.Num(e.rank)));
+	if ( idx and tt.SetSpell ) then
+		local ok = pcall(tt.SetSpell, tt, idx, "spell");
+		if ( ok ) then
+			if ( rem > 0.05 ) then
+				tt:AddLine(string.format("Ready in %.1f sec", rem), 1, 0.4, 0.4);
+			end
+			tt:AddLine("Casts automatically", 0.6, 0.6, 0.6);
+			return;
+		end
+	end
+	tt:AddLine((info and info.name) or Pretty(e.key), G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
 	if ( G.Num(e.rank) > 0 ) then
 		tt:AddLine("Rank " .. math.floor(G.Num(e.rank)), 0.8, 0.8, 0.8);
 	end
@@ -245,7 +328,6 @@ local function SpellTooltip(tt, b)
 	if ( cdmax > 0 ) then
 		tt:AddLine(string.format("Cooldown: %.1f sec", cdmax), 1, 1, 1);
 	end
-	local rem = G.SpellRemaining(e);
 	if ( rem > 0.05 ) then
 		tt:AddLine(string.format("Ready in %.1f sec", rem), 1, 0.4, 0.4);
 	else
@@ -523,6 +605,7 @@ function G.UpdateSkills(dt)
 		end
 	end
 
+	G.skillNow = AZS_GetRunTime and AZS_GetRunTime() or nil;
 	local spells = AZS_SPELLS or {};
 	local n = table.getn(spells);
 	local racialEntry = nil;
@@ -543,11 +626,13 @@ function G.UpdateSkills(dt)
 	else
 		SetEmpty(G.racial);
 	end
+	G.skillNow = nil;
 
 	-- the class icon on the character button
 	local z = AZS_ZONE or {};
 	local c = G.CLASSCOORDS[z.class or ""];
-	if ( c ) then
+	if ( c and G.charBtn.classShown ~= c ) then
+		G.charBtn.classShown = c;
 		G.charBtn.icon:SetTexCoord(c[1] + 0.01, c[2] - 0.01, c[3] + 0.01, c[4] - 0.01);
 	end
 end

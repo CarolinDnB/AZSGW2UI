@@ -192,7 +192,7 @@ local STATS = {
 	{ "dmg", "Damage", "mult", 0, OFFENSE, "Damage multiplier" },
 	{ "crit", "Crit Chance", "pct", 1, OFFENSE, "Chance to hit critically" },
 	{ "cm", "Crit Damage", "mult", 2, OFFENSE, "Critical hit multiplier" },
-	{ "cd", "Cooldowns", "mult", 3, OFFENSE, "Cooldown multiplier (lower is faster)" },
+	{ "cd", "CDR", "cut", 3, OFFENSE, "How much shorter your cooldowns are", "Cooldown Reduction" },
 	{ "spd", "Speed", "mult", 4, OFFENSE, "Speed" },
 	{ "area", "Area", "mult", 5, OFFENSE, "Area of effect" },
 	{ "cnt", "Extra Targets", "num", 6, OFFENSE, "Extra targets of your spells" },
@@ -256,6 +256,13 @@ local FORMAT = {
 		end
 		return Trim(string.format("%.1f", v)) .. "%";
 	end,
+	-- the API gives the cooldown multiplier (0.62 = cooldowns take 62% as long); shown as the cut: 38%
+	cut = function(v)
+		if ( math.abs(v) > 10 ) then
+			return Trim(string.format("%.1f", v)) .. "%";
+		end
+		return Trim(string.format("%.1f", ( 1 - v ) * 100)) .. "%";
+	end,
 	mult = function(v)
 		if ( math.abs(v) >= 10 ) then
 			return Trim(string.format("%.0f", v)) .. "%";
@@ -307,7 +314,7 @@ local function NewCell(panel)
 		if ( not e ) then
 			return;
 		end
-		tt:AddLine(e.label, G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+		tt:AddLine(e.title or e.label, G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
 		if ( e.tip and e.tip ~= "" ) then
 			tt:AddLine(e.tip, 0.72, 0.72, 0.76);
 		end
@@ -315,8 +322,15 @@ local function NewCell(panel)
 		if ( e.fmt == "mult" and math.abs(e.v) < 10 ) then
 			tt:AddLine("= " .. Trim(string.format("%.0f", e.v * 100)) .. "% of the normal value", 0.72, 0.72, 0.76);
 		end
+		if ( e.fmt == "cut" and math.abs(e.v) <= 10 ) then
+			tt:AddLine("Cooldowns take " .. Trim(string.format("%.0f", e.v * 100)) .. "% as long", 0.72, 0.72, 0.76);
+		end
 		if ( e.gear and e.gear ~= 0 ) then
-			tt:AddLine("From gear: " .. Write(e.fmt, e.gear), 0.6, 1, 0.6);
+			if ( e.fmt == "cut" and math.abs(e.gear) <= 10 ) then
+				tt:AddLine("From gear: " .. Trim(string.format("%.1f", math.abs(e.gear) * 100)) .. "%", 0.6, 1, 0.6);
+			else
+				tt:AddLine("From gear: " .. Write(e.fmt, e.gear), 0.6, 1, 0.6);
+			end
 		end
 		tt:AddLine(e.key .. " = " .. tostring(e.raw), 0.5, 0.5, 0.5);
 	end, "ANCHOR_LEFT");
@@ -349,7 +363,7 @@ local function Collect()
 		if ( v ) then
 			local gv = tonumber(st["g" .. s[1]]);
 			table.insert(groups[s[5]], { key = s[1], label = s[2], fmt = s[3], icon = s[4], group = s[5],
-				tip = s[6], v = v, raw = raw, gear = gv });
+				tip = s[6], title = s[7], v = v, raw = raw, gear = gv });
 		end
 	end
 	local extra = {};
@@ -590,7 +604,7 @@ function G.BuildCharacter()
 	local f = CreateFrame("Frame", "AZSGW2Char", UIParent);
 	f:SetWidth(W);
 	f:SetHeight(H);
-	f:SetPoint("CENTER", UIParent, "CENTER", 0, 10);
+	f:SetPoint("LEFT", UIParent, "LEFT", 14, 10);          -- at the left edge, the middle of the screen stays free
 	f:SetFrameStrata("DIALOG");
 	f:SetMovable(true);
 	f:EnableMouse(true);

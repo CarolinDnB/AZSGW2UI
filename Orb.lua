@@ -9,10 +9,19 @@ local RIMSCALE = 1.30;   -- rim texture size relative to the orb
 local XPW = 44;          -- width of each experience bar
 local XPH = 9;
 
+-- The orb is updated every frame so its bars glide, but most frames nothing visible changes: the fill is
+-- only redrawn when it moved by about a pixel (the smoothing settles within a second), and text only when
+-- the string differs. Redrawing identical values costs the game layout work for nothing.
+local lastCrop = {};
 local function SetCrop(tex, frac)
 	if ( frac > 1 ) then
 		frac = 1;
 	end
+	local was = lastCrop[tex];
+	if ( was and math.abs(was - frac) < 0.0005 ) then
+		return;
+	end
+	lastCrop[tex] = frac;
 	if ( frac < 0.004 ) then
 		tex:Hide();
 		return;
@@ -21,6 +30,8 @@ local function SetCrop(tex, frac)
 	tex:SetHeight(S * frac);
 	tex:SetTexCoord(0, 1, 1 - frac, 1);
 end
+
+local SetTextOnce = G.SetText;
 
 -- The two experience bars are curved arcs that follow the top of the orb, like the endurance bars in
 -- GW2. The arc is a 64 x 64 texture (made by make_textures.py: same radii and angles); each arc's fill is
@@ -31,12 +42,16 @@ local ARC_U1 = 72 - ARC_RIN * math.sin(ARC_A0 * math.pi / 180);
 local ARC_N = 64;
 
 local function ArcSetFrac(self, p)
+	if ( p > 1 ) then
+		p = 1;
+	end
+	if ( self.lastP and math.abs(self.lastP - p) < 0.0005 ) then
+		return;
+	end
+	self.lastP = p;
 	if ( p < 0.004 ) then
 		self.fill:Hide();
 		return;
-	end
-	if ( p > 1 ) then
-		p = 1;
 	end
 	local d0, d1 = ARC_U0, ARC_U1;
 	if ( self.mirrored ) then
@@ -250,18 +265,27 @@ function G.UpdateOrb(dt)
 	local k = math.min(1, dt * 12);
 	f.hpDisp = f.hpDisp + (hpT - f.hpDisp) * k;
 	f.shDisp = f.shDisp + (shT - f.shDisp) * k;
+	if ( hpT == 0 and f.hpDisp < 0.004 ) then
+		f.hpDisp = 0;                              -- settle at empty, so the sliver goes away
+	end
 
 	SetCrop(f.fill, f.hpDisp);
 	if ( sh > 0 ) then
 		SetCrop(f.shield, f.shDisp);
 	else
-		f.shield:Hide();
+		if ( lastCrop[f.shield] ~= -1 ) then
+			f.shield:Hide();
+			lastCrop[f.shield] = -1;           -- hidden; the next shield draws again
+		end
 	end
 
 	local phase = G.Phase();
 	if ( phase == "dead" ) then
-		f.fill:SetVertexColor(0.35, 0.35, 0.38, 1);
-		f.hpText:SetText("0");
+		if ( f.fillTint ~= "dead" ) then
+			f.fillTint = "dead";
+			f.fill:SetVertexColor(0.35, 0.35, 0.38, 1);
+		end
+		SetTextOnce(f.hpText, "0");
 	else
 		local frac = 1;
 		if ( hpm > 0 ) then
@@ -271,10 +295,12 @@ function G.UpdateOrb(dt)
 			-- low health: pulse towards a brighter red
 			local p = 0.5 + 0.5 * math.sin(GetTime() * 7);
 			f.fill:SetVertexColor(0.88 + 0.12 * p, 0.10 + 0.10 * p, 0.08, 1);
-		else
+			f.fillTint = "pulse";
+		elseif ( f.fillTint ~= "red" ) then
+			f.fillTint = "red";
 			f.fill:SetVertexColor(0.88, 0.10, 0.08, 1);
 		end
-		f.hpText:SetText(G.Comma(hp));
+		SetTextOnce(f.hpText, G.Comma(hp));
 	end
 
 	-- experience gauge
@@ -289,7 +315,7 @@ function G.UpdateOrb(dt)
 		f.xpDisp = f.xpDisp + (xpT - f.xpDisp) * k;
 	end
 	G.SetXP(f, f.xpDisp);
-	f.badge.text:SetText(tostring(math.floor(G.Num(run.lvl))));
+	SetTextOnce(f.badge.text, tostring(math.floor(G.Num(run.lvl))));
 end
 
 ------------------------------------------------------------------------ class resource bar (the "endurance" slot)

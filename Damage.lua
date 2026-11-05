@@ -71,12 +71,20 @@ end
 -- numbers there are and however far away
 local SIZES = { 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34 };
 
+-- the nearest size is looked up once per quarter point and then remembered (this runs for every number on
+-- every frame, so a loop over the list each time added up)
+local snapped = {};
 local function Snap(size)
-	local best = SIZES[1];
-	for i = 1, table.getn(SIZES) do
-		if ( math.abs(SIZES[i] - size) < math.abs(best - size) ) then
-			best = SIZES[i];
+	local key = math.floor(size * 4 + 0.5);
+	local best = snapped[key];
+	if ( not best ) then
+		best = SIZES[1];
+		for i = 1, table.getn(SIZES) do
+			if ( math.abs(SIZES[i] - size) < math.abs(best - size) ) then
+				best = SIZES[i];
+			end
 		end
+		snapped[key] = best;
 	end
 	return best;
 end
@@ -87,16 +95,19 @@ local function Style(l, size)
 		l.size = size;
 		l.holder.text:SetFont(PickFont(), size, "OUTLINE");
 		if ( l.crit ) then
-			-- the red blot is a little taller than the digits and sits behind the start of the number
+			-- the red blot is centred behind the number and grows with it: as wide as the digits plus a margin,
+			-- and a little taller for long numbers, so 10 and 1000 both sit on a blot that fits
 			local tw = l.holder.text:GetStringWidth();
 			if ( not tw or tw <= 0 ) then
-				tw = size * 0.5 * string.len(tostring(l.holder.text:GetText() or "0000"));
+				tw = size * 0.55 * string.len(tostring(l.holder.text:GetText() or "00"));
 			end
-			local w = size * 1.9;
+			local base = size * 1.9;
+			local w = math.max(base, ( tw + size * 0.5 ) / 0.65);   -- the dark core is about 65% of the drawing
+			local h = base * math.min(1.35, math.max(1, math.sqrt(w / base)));
 			l.holder.splat:SetWidth(w);
-			l.holder.splat:SetHeight(w);
+			l.holder.splat:SetHeight(h);
 			l.holder.splat:ClearAllPoints();
-			l.holder.splat:SetPoint("CENTER", l.holder, "CENTER", math.min(0, -tw / 2 + size * 0.6), 0);
+			l.holder.splat:SetPoint("CENTER", l.holder, "CENTER", 0, 0);
 		end
 	end
 end
@@ -256,10 +267,21 @@ function G.DamageFrame()
 	if ( n == 0 ) then
 		return;
 	end
-	local ids = {};
+	-- the list of anchors is kept between frames (a new table sixty times a second is garbage the game has
+	-- to collect); entries past the current count are cleared
+	local ids = d.ids;
+	if ( not ids ) then
+		ids = {};
+		d.ids = ids;
+		d.idsN = 0;
+	end
 	for i = 1, n do
 		ids[i] = labels[i].anchorId;
 	end
+	for i = n + 1, d.idsN do
+		ids[i] = nil;
+	end
+	d.idsN = n;
 	local proj = AZS_ProjectCombatTextAnchors(ids, "follow");
 	if ( not proj or not proj.entries ) then
 		return;
@@ -293,11 +315,19 @@ function G.DamageFrame()
 			if ( t > 0.55 ) then
 				a = a * (1 - (t - 0.55) / 0.45);
 			end
-			l.holder:SetAlpha(G.Clamp(a, 0, 1));
+			a = math.floor(G.Clamp(a, 0, 1) * 40 + 0.5) / 40;           -- 40 steps are plenty for a fade
+			if ( l.shownAlpha ~= a ) then
+				l.shownAlpha = a;
+				l.holder:SetAlpha(a);
+			end
 			l.holder:ClearAllPoints();
 			l.holder:SetPoint("CENTER", WorldFrame, "BOTTOMLEFT", e.x + l.jx, e.y + up + 14);
-			l.holder:Show();
-		else
+			if ( not l.vis ) then
+				l.vis = true;
+				l.holder:Show();
+			end
+		elseif ( l.vis ~= false ) then
+			l.vis = false;
 			l.holder:Hide();
 		end
 	end

@@ -225,7 +225,7 @@ function G.Start()
 	AddUpdater("party", G.UpdateParty, 0.2);
 	AddUpdater("revive", G.UpdateRevive, 0.05);
 	AddUpdater("character", G.UpdateCharacter, 0.25);
-	AddUpdater("target", G.UpdateTarget, 0);
+	AddUpdater("target", G.UpdateTarget, 0.05);
 	AddUpdater("top", G.UpdateTop, 0.1);
 	AddUpdater("tally", G.UpdateTally, 0.25);
 	AddUpdater("bosses", G.UpdateBosses, 0.1);

@@ -58,6 +58,14 @@ local STANDIN = {
 };
 local UNKNOWN = "Interface\\Icons\\INV_Misc_QuestionMark";
 
+-- the spell a line is known by: its own name, and on the Party tab the player's best spell (the line's name is the player)
+local function SpellOf(mode, d)
+	if ( mode == "party" ) then
+		return tostring(d.top or "");
+	end
+	return tostring(d.name or "");
+end
+
 local function ReadIcons(mode, lines)
 	for key, info in pairs(G.abilityInfo or {}) do
 		if ( info.name and info.icon and G.meterIcons[info.name] ~= info.icon ) then
@@ -65,7 +73,7 @@ local function ReadIcons(mode, lines)
 		end
 	end
 	local icons = G.meterIcons;
-	if ( not AZS_GetMeterContext or not AZS_GetMeterSnapshot or mode == "party" ) then
+	if ( not AZS_GetMeterContext or not AZS_GetMeterSnapshot ) then
 		return;
 	end
 	-- the snapshot call is only made for lines that still have no icon (and not more often than the gap
@@ -73,8 +81,8 @@ local function ReadIcons(mode, lines)
 	local now = GetTime();
 	local need = false;
 	for i = 1, table.getn(lines or {}) do
-		local n = tostring(lines[i].name or "");
-		if ( not icons[n] and not STANDIN[string.lower(n)] ) then
+		local n = SpellOf(mode, lines[i]);
+		if ( n ~= "" and not icons[n] and not STANDIN[string.lower(n)] ) then
 			local last = G.meterTry[n];
 			if ( not last or now - last >= RETRY ) then
 				need = true;
@@ -90,7 +98,7 @@ local function ReadIcons(mode, lines)
 	end
 	local tries = G.meterTry;
 	for i = 1, table.getn(lines or {}) do
-		local n = tostring(lines[i].name or "");
+		local n = SpellOf(mode, lines[i]);
 		if ( tries[n] == nil ) then
 			G.meterTryN = ( G.meterTryN or 0 ) + 1;
 		end
@@ -106,6 +114,8 @@ local function ReadIcons(mode, lines)
 		q.metric = "healing";
 	elseif ( mode == "boss" ) then
 		q.period = "encounter";
+	elseif ( mode == "party" ) then
+		q.scope = "party";                     -- every hero's sources: their icons are in the descriptors
 	end
 	local snap = AZS_GetMeterSnapshot(q);
 	if ( snap and snap.sources ) then
@@ -120,6 +130,125 @@ end
 local function IconFor(name)
 	name = tostring(name or "");
 	return G.meterIcons[name] or STANDIN[string.lower(name)] or UNKNOWN;
+end
+
+------------------------------------------------------------------------ reset and the 10 second rate
+-- Reset: the game's counters cannot be cleared (the API only reads them), so a reset remembers what every line
+-- had at that moment and shows the difference from then on, on all four tabs. A new run, or a counter that
+-- went down (a new boss fight), ends the remembered state and the game's numbers show again.
+-- The rate is the damage (healing) of the last 10 seconds: every tab's total is noted twice a second (once a
+-- second for the tabs not on screen) and the rate is the change over the last 10 seconds. It costs no extra
+-- API call and counts from the reset after one.
+
+local WINDOW = 10;
+local base = {};                 -- base[mode] = { map = { name = amount }, total = amount, run = runId }
+local rings = {};                -- rings[mode] = { t = { time, ... }, v = { total, ... } }
+G.meterResetAt = nil;
+
+local function RunId()
+	if ( AZS_GetMeterContext ) then
+		local ctx = AZS_GetMeterContext();
+		if ( type(ctx) == "table" and type(ctx.runId) == "string" ) then
+			return ctx.runId;
+		end
+	end
+	return nil;
+end
+
+function G.ResetMeter()
+	local run = RunId();
+	base, rings = {}, {};
+	for i = 1, table.getn(TABS) do
+		local mode = TABS[i].key;
+		local lines, total = GetData(mode);
+		local b = { map = {}, total = G.Num(total), run = run };
+		for j = 1, table.getn(lines or {}) do
+			local d = lines[j];
+			if ( d.name ~= nil ) then
+				b.map[tostring(d.name)] = G.Num(d.dmg);
+			end
+		end
+		base[mode] = b;
+	end
+	G.meterResetAt = GetTime();
+	if ( G.meter ) then
+		G.UpdateMeter(0);
+	end
+end
+
+-- the lines and the total as they stand since the reset (changes the lines in place: they are a copy)
+local function Rebase(mode, lines, total)
+	local b = base[mode];
+	if ( not b ) then
+		return lines, total;
+	end
+	local over = false;
+	if ( b.run and RunId() ~= b.run ) then
+		over = true;                                       -- another run
+	elseif ( G.Num(total) < b.total - 0.5 ) then
+		over = true;                                       -- the counters started over (a new boss fight)
+	else
+		for i = 1, table.getn(lines) do
+			local o = b.map[tostring(lines[i].name)];
+			if ( o and G.Num(lines[i].dmg) < o - 0.5 ) then
+				over = true;
+				break;
+			end
+		end
+	end
+	if ( over ) then
+		base[mode] = nil;
+		return lines, total;
+	end
+	local out, sum = {}, 0;
+	local span = math.max(1, GetTime() - ( G.meterResetAt or GetTime() ));
+	for i = 1, table.getn(lines) do
+		local d = lines[i];
+		local v = G.Num(d.dmg) - ( b.map[tostring(d.name)] or 0 );
+		if ( v > 0.5 ) then
+			d.dmg, d.dps = v, v / span;
+			sum = sum + v;
+			table.insert(out, d);
+		end
+	end
+	table.sort(out, function(a, c) return a.dmg > c.dmg; end);
+	for i = 1, table.getn(out) do
+		out[i].share = out[i].dmg / sum;
+	end
+	return out, sum;
+end
+
+-- notes the total of a tab; a total that went down (new fight, new run, reset) starts the tab's history over
+local function Note(mode, now, total)
+	local r = rings[mode];
+	if ( not r ) then
+		r = { t = {}, v = {} };
+		rings[mode] = r;
+	end
+	local n = table.getn(r.t);
+	if ( n > 0 and total < r.v[n] - 0.5 ) then
+		r.t, r.v, n = {}, {}, 0;
+	end
+	r.t[n + 1], r.v[n + 1] = now, total;
+	-- one note older than the window is kept, the rest goes
+	while ( table.getn(r.t) > 2 and r.t[2] <= now - WINDOW ) do
+		table.remove(r.t, 1);
+		table.remove(r.v, 1);
+	end
+end
+
+-- per second over the last WINDOW seconds (0 while there is no history yet)
+local function RateOf(mode, now)
+	local r = rings[mode];
+	local n = r and table.getn(r.t) or 0;
+	if ( n < 2 ) then
+		return 0;
+	end
+	local span = r.t[n] - r.t[1];
+	if ( span < 0.25 ) then
+		return 0;
+	end
+	return math.max(0, ( r.v[n] - r.v[1] ) / span);
 end
 
 local function SetMode(mode)
@@ -175,6 +304,25 @@ function G.BuildMeter()
 	f.summary = G.Text(f, 11, "LEFT");
 	f.summary:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -23);
 	f.summary:SetTextColor(0.85, 0.85, 0.85);
+
+	local rb = CreateFrame("Button", nil, f);                 -- Reset: all four tabs start from zero
+	rb:SetWidth(40);
+	rb:SetHeight(15);
+	rb:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -22);
+	G.Solid(rb, "BACKGROUND", 0.05, 0.05, 0.06, 0.85):SetAllPoints(rb);
+	G.Edges(rb, G.GOLD[1], G.GOLD[2], G.GOLD[3], 0.6, 1, "BORDER");
+	rb.text = G.Text(rb, 10, "CENTER");
+	rb.text:SetPoint("CENTER", rb, "CENTER", 0, 0);
+	rb.text:SetText("Reset");
+	rb.text:SetTextColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+	rb:SetScript("OnClick", function()
+		G.ResetMeter();
+	end);
+	G.Tooltip(rb, function(tt)
+		tt:AddLine("Reset the meter", G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+		tt:AddLine("All four tabs count from zero again. The game's own meter keeps its numbers.", 0.8, 0.8, 0.8, 1);
+	end, "ANCHOR_TOP");
+	f.resetBtn = rb;
 
 	f.rows = {};
 	for i = 1, ROWS do
@@ -235,6 +383,7 @@ function G.UpdateMeter(dt)
 	local mode = AZSGW2DB.meterMode or "damage";
 	local lines, total, rate = GetData(mode);
 	lines = lines or {};
+	lines, total = Rebase(mode, lines, G.Num(total));
 	f.iconAcc = ( f.iconAcc or 99 ) + dt;
 	if ( f.iconAcc >= 1 or f.iconMode ~= mode ) then
 		f.iconAcc = 0;
@@ -242,10 +391,26 @@ function G.UpdateMeter(dt)
 		ReadIcons(mode, lines);
 	end
 
-	local unit = "DPS";
+	local unit = "10s DPS";                                    -- the last 10 seconds, not the whole run
 	if ( mode == "healing" ) then
-		unit = "HPS";
+		unit = "10s HPS";
 	end
+	-- the rate of the last 10 seconds, from the totals noted here (the tabs that are not shown get a note once a second)
+	local now = GetTime();
+	Note(mode, now, total);
+	f.noteAcc = ( f.noteAcc or 0 ) + dt;
+	if ( f.noteAcc >= 1 ) then
+		f.noteAcc = 0;
+		for i = 1, table.getn(TABS) do
+			local m = TABS[i].key;
+			if ( m ~= mode ) then
+				local l, t = GetData(m);
+				local _, tt = Rebase(m, l or {}, G.Num(t));
+				Note(m, now, tt);
+			end
+		end
+	end
+	rate = RateOf(mode, now);
 	f.summary:SetText(string.format("Total: %s   %s: %s", G.Short(total), unit, G.Short(rate)));
 
 	local maxShare = 0;
@@ -275,18 +440,14 @@ function G.UpdateMeter(dt)
 				w = math.max(1, inner * G.Clamp(G.Num(d.share) / maxShare, 0, 1));
 			end
 			r.bar:SetWidth(w);
-			r.name:SetText(tostring(d.name or "?"));
-			if ( mode == "party" ) then
-				r.iconBack:Hide();
-				r.icon:Hide();
-				r.name:ClearAllPoints();
-				r.name:SetPoint("LEFT", r, "LEFT", 4, 0);
-			else
-				r.iconBack:Show();
-				r.icon:Show();
-				r.icon:SetTexture(IconFor(d.name));
-				r.name:ClearAllPoints();
-				r.name:SetPoint("LEFT", r.iconBack, "RIGHT", 5, 0);
+			r.name:SetText(G.Esc(tostring(d.name or "?")));
+			-- the icon: the spell (the Party tab: the player's best spell) left of the name
+			r.iconBack:Show();
+			r.icon:Show();
+			local ic = IconFor(SpellOf(mode, d));
+			if ( r.curIcon ~= ic ) then
+				r.curIcon = ic;
+				r.icon:SetTexture(ic);
 			end
 			r.val:SetText(string.format("%s  %.1f%%", G.Short(d.dmg), G.Num(d.share) * 100));
 		else

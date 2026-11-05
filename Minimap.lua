@@ -327,6 +327,15 @@ end
 
 ------------------------------------------------------------------------ update
 
+-- pins are updated twenty times a second: position, fade and visibility are only sent to the game when they
+-- changed (a hero standing still moves no pin)
+local function SetPinAlpha(pin, a)
+	if ( pin.alphaSet ~= a ) then
+		pin.alphaSet = a;
+		pin:SetAlpha(a);
+	end
+end
+
 local function Place(pin, holder, p, x, y, ppy, half)
 	local dx, dy = x - p.x, y - p.y;
 	local px, py = -dy * ppy, dx * ppy;
@@ -336,20 +345,30 @@ local function Place(pin, holder, p, x, y, ppy, half)
 		px, py = px * half / m, py * half / m;
 		edge = true;
 	end
-	pin:ClearAllPoints();
-	pin:SetPoint("CENTER", holder, "CENTER", px, py);
-	if ( edge ) then
-		pin:SetAlpha(0.6);
-	else
-		pin:SetAlpha(1);
+	if ( pin.px ~= px or pin.py ~= py ) then
+		pin.px, pin.py = px, py;
+		pin:ClearAllPoints();
+		pin:SetPoint("CENTER", holder, "CENTER", px, py);
 	end
-	pin:Show();
+	if ( edge ) then
+		SetPinAlpha(pin, 0.6);
+	else
+		SetPinAlpha(pin, 1);
+	end
+	if ( not pin.vis ) then
+		pin.vis = true;
+		pin:Show();
+	end
 	return math.sqrt(dx * dx + dy * dy);
 end
 
 local function HidePins(list, from)
 	for i = from, table.getn(list) do
-		list[i]:Hide();
+		local pin = list[i];
+		if ( pin.vis ~= false ) then
+			pin.vis = false;
+			pin:Hide();
+		end
 	end
 end
 
@@ -436,7 +455,7 @@ function G.UpdateMinimap(dt)
 					if ( l.state == "awake" ) then
 						cell = CELL.awake;
 						word = "Fighting";
-						pin:SetAlpha(0.65 + 0.35 * math.sin(GetTime() * 6));
+						SetPinAlpha(pin, 0.65 + 0.35 * math.sin(GetTime() * 6));
 					elseif ( l.state == "asleep" ) then
 						cell = CELL.asleep;
 						word = "Asleep";

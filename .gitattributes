@@ -1,0 +1,8 @@
+# Left out of the zip that the release workflow builds (players do not need these)
+.github export-ignore
+.gitattributes export-ignore
+tools export-ignore
+
+# Never change the line endings of textures and fonts
+*.tga binary
+*.ttf binary

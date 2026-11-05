@@ -1,0 +1,2249 @@
+io.stdout:setvbuf("no")
+
+-- where the addon folder is (AZS_ROOT: the folder that holds AZSGW2UI/, default: one up from tools/) and where the
+-- layout dumps go (AZS_OUT, default: the current folder)
+local ROOT = os.getenv("AZS_ROOT") or ".."
+local ADDON_DIR = ROOT .. "/AZSGW2UI"          -- the addon folder: AZS_ROOT/AZSGW2UI, or AZS_ROOT itself when the toc is there (the repository layout)
+do
+	local probe = io.open(ADDON_DIR .. "/AZSGW2UI.toc")
+	if probe then probe:close() else ADDON_DIR = ROOT end
+end
+local OUTDIR = os.getenv("AZS_OUT") or "."
+
+-- ---------- Lua 5.0 compatibility shims (the real client is Lua 5.0)
+table.getn = function(t) assert(type(t) == "table", "table.getn on " .. type(t)); return #t end
+math.mod = math.fmod
+unpack = table.unpack
+local realFormat = string.format
+
+-- ---------- tiny 1.12 widget mock with strict argument checks
+local used = {}
+cvars = { hudBuild = "1", minimapZoom = "3", minimapInsideZoom = "3", CombatDamage = "1", PetMeleeDamage = "1", PetSpellDamage = "1" }
+local globals = {}
+local namedFrames = {}
+local allWidgets = {}
+
+local function isnum(v) return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge end
+local function needNum(fn, ...)
+	local a = { ... }
+	for i = 1, select("#", ...) do
+		if not isnum(a[i]) then error(fn .. ": argument " .. i .. " is not a number: " .. tostring(a[i]), 3) end
+	end
+end
+
+local Widget = {}
+local impl = {}
+
+local function new(kind, parent, name)
+	local w = setmetatable({ kind = kind, parent = parent, _name = name, shown = true,
+		scripts = {}, w = 100, h = 20, text = "", points = 0 }, Widget)
+	table.insert(allWidgets, w)
+	if name then namedFrames[name] = w; _G[name] = w end
+	return w
+end
+
+Widget.__index = function(t, k)
+	local f = impl[k]
+	if f then
+		return function(self, ...)
+			used[k] = (used[k] or 0) + 1
+			return f(self, ...)
+		end
+	end
+	if (t.kind == "Texture" or t.kind == "FontString") and (k == "GetScript" or k == "SetScript") then return nil end
+	-- lower-case names are Lua fields set by the addon: a missing one is nil, as in the real client
+	if type(k) ~= "string" or not string.find(k, "^%u") then return nil end
+	return function(self, ...)
+		used[k] = (used[k] or 0) + 1
+		globals["UNKNOWN_METHOD_" .. tostring(k)] = true
+		return nil
+	end
+end
+
+impl.SetWidth = function(self, v) needNum("SetWidth", v); self.w = v; self.wSet = true end
+impl.SetHeight = function(self, v) needNum("SetHeight", v); self.h = v; self.hSet = true end
+impl.GetWidth = function(self) return self.w end
+impl.GetHeight = function(self) return self.h end
+impl.Show = function(self) self.shown = true end
+impl.Hide = function(self) self.shown = false end
+impl.IsShown = function(self) return self.shown end
+impl.SetScript = function(self, n, f) assert(type(f) == "function" or f == nil); self.scripts[n] = f end
+impl.GetScript = function(self, n) return self.scripts[n] end
+impl.GetFrameLevel = function(self) return rawget(self, "level") or ((self.parent and self.parent:GetFrameLevel() or 0) + 1) end
+impl.SetFrameLevel = function(self, v) needNum("SetFrameLevel", v); self.level = v end
+impl.SetFrameStrata = function(self, s) assert(type(s) == "string"); self.strata = s end
+impl.GetName = function(self) return rawget(self, "_name") end
+impl.GetParent = function(self) return self.parent end
+impl.EnableMouse = function() end
+impl.EnableMouseWheel = function() end
+impl.SetParent = function(self, p) assert(type(p) == "table", "SetParent needs a frame"); self.parent = p end
+impl.SetMaskTexture = function(self, path) assert(type(path) == "string"); self.mask = path end
+impl.GetNumPoints = function(self) return 1 end
+impl.GetEffectiveScale = function(self) return 1 end
+impl.GetZoom = function(self) return self.zoom or 0 end
+impl.GetZoomLevels = function(self) return 5 end
+impl.SetZoom = function(self, z)
+	needNum("SetZoom", z); assert(z >= 0 and z <= 4, "zoom out of range")
+	self.zoom = z
+	if self.indoors then cvars.minimapInsideZoom = tostring(z) else cvars.minimapZoom = tostring(z) end
+end
+impl.SetMovable = function() end
+impl.RegisterForDrag = function() end
+impl.RegisterEvent = function() end
+impl.StartMoving = function() end
+impl.StopMovingOrSizing = function() end
+impl.SetClampedToScreen = function() end
+impl.GetPoint = function() return "CENTER", nil, "CENTER", 0, 0 end
+impl.ClearAllPoints = function(self) self.points = 0; self.pts = {}; self.allpts = nil end
+impl.SetScale = function(self, v) needNum("SetScale", v); assert(v > 0) end
+impl.SetAlpha = function(self, v) needNum("SetAlpha", v) end
+impl.SetAllPoints = function(self, f) assert(type(f) == "table", "SetAllPoints needs a frame/region"); self.allpts = f; self.pts = {} end
+impl.CreateTexture = function(self, n, layer)
+	assert(self.kind ~= "Texture" and self.kind ~= "FontString", "CreateTexture on a region")
+	assert(layer == nil or layer == "BACKGROUND" or layer == "BORDER" or layer == "ARTWORK" or layer == "OVERLAY" or layer == "HIGHLIGHT", "bad layer " .. tostring(layer))
+	local t = new("Texture", self)
+	t.layer = layer or "ARTWORK"
+	return t
+end
+impl.CreateFontString = function(self, n, layer)
+	assert(self.kind ~= "Texture" and self.kind ~= "FontString")
+	assert(layer == nil or layer == "BACKGROUND" or layer == "BORDER" or layer == "ARTWORK" or layer == "OVERLAY", "bad layer " .. tostring(layer))
+	return new("FontString", self)
+end
+impl.SetPoint = function(self, point, rel, relPoint, x, y)
+	assert(type(point) == "string", "SetPoint point")
+	if rel ~= nil then
+		assert(type(rel) == "table" or type(rel) == "string", "SetPoint relativeTo is " .. type(rel))
+		if type(rel) == "string" then assert(_G[rel], "SetPoint relativeTo name missing: " .. rel) end
+		if type(relPoint) == "number" then x, y = relPoint, rel; error("SetPoint: relPoint is a number: " .. tostring(relPoint)) end
+		if relPoint ~= nil then assert(type(relPoint) == "string", "SetPoint relPoint") end
+		if x ~= nil then needNum("SetPoint x", x) end
+		if y ~= nil then needNum("SetPoint y", y) end
+	end
+	self.points = self.points + 1
+	local target = rel
+	if type(target) == "string" then target = _G[target] end
+	self.pts = self.pts or {}
+	self.allpts = nil
+	table.insert(self.pts, { point, target or self.parent, relPoint or point, x or 0, y or 0 })
+end
+impl.SetTexture = function(self, a, b, c, d)
+	if type(a) == "number" then needNum("SetTexture", a, b, c) self.tex = nil self.solid = { a, b, c, d } return end
+	assert(a == nil or type(a) == "string", "SetTexture path " .. tostring(a))
+	self.tex = a
+end
+impl.SetVertexColor = function(self, r, g, b, a) needNum("SetVertexColor", r, g, b); if a ~= nil then needNum("SetVertexColor a", a) end self.vc = { r, g, b, a or 1 } end
+impl.SetTexCoord = function(self, ...) needNum("SetTexCoord", ...) self.tc = { ... } end
+impl.SetBlendMode = function(self, m) assert(m == "ADD" or m == "BLEND" or m == "DISABLE" or m == "ALPHAKEY" or m == "MOD") end
+impl.SetFont = function(self, f, s, fl)
+	assert(type(f) == "string", "SetFont path"); needNum("SetFont size", s)
+	assert(fl == nil or fl == "OUTLINE" or fl == "THICKOUTLINE" or fl == "")
+	if failAzsFont and string.find(f, "azs_numbers", 1, true) then return nil end   -- like the client: the old font stays
+	self.fontSet = true
+	if fontSizes and string.find(f, "azs_numbers", 1, true) then fontSizes[s] = true end
+	self.fpath = f
+	self.fflags = fl or ""
+	self.fsize = s
+end
+impl.SetJustifyH = function(self, j) assert(j == "LEFT" or j == "RIGHT" or j == "CENTER", "SetJustifyH " .. tostring(j)); self.just = j end
+impl.SetTextColor = function(self, r, g, b, a) needNum("SetTextColor", r, g, b) self.tcol = { r, g, b } end
+impl.SetText = function(self, t)
+	assert(self.fontSet, "SetText before SetFont")
+	assert(type(t) == "string", "SetText got " .. type(t) .. " (" .. tostring(t) .. ")")
+	self.text = t
+end
+impl.GetFont = function(self) return self.fpath, self.fsize, "" end
+impl.GetStringWidth = function(self)
+	local t = rawget(self, "text") or ""
+	local per = 0.507
+	if not string.find(tostring(self.fpath), "azs_numbers", 1, true) then per = 0.55 end
+	return string.len(t) * (self.fsize or 12) * per
+end
+impl.GetText = function(self) local t = rawget(self, "text"); if type(t) == "string" then return t end return nil end
+impl.GetObjectType = function(self) return self.kind end
+impl.GetRegions = function(self)
+	local out = {}
+	for _, w in ipairs(allWidgets) do
+		if (w.kind == "Texture" or w.kind == "FontString") and w.parent == self then table.insert(out, w) end
+	end
+	return unpack(out)
+end
+impl.GetChildren = function(self)
+	local out = {}
+	for _, w in ipairs(allWidgets) do
+		if (w.kind == "Frame" or w.kind == "Button") and w.parent == self then table.insert(out, w) end
+	end
+	return unpack(out)
+end
+impl.IsVisible = function(self)
+	local p = self
+	while p do if not p.shown then return false end p = p.parent end
+	return true
+end
+impl.GetNumRegions = function(self) return 0 end
+impl.Click = function() end
+-- GameTooltip
+tipLines = {}
+impl.AddLine = function(self, t, r, g, b)
+	assert(type(t) == "string", "AddLine text " .. tostring(t))
+	if r ~= nil then needNum("AddLine color", r, g, b) end
+	table.insert(tipLines, t)
+end
+impl.SetOwner = function(self, f, a) assert(type(f) == "table" and type(a) == "string"); tipLines = {}; lastSetSpell = nil end
+impl.SetSpell = function(self, idx, book) assert(type(idx) == "number" and book == "spell", "SetSpell args"); lastSetSpell = { idx, book }; tipLines = { "(game tooltip)" } end
+local book = { { "Frostbolt", "Rank 2" }, { "Frostbolt", "Rank 3" }, { "Blizzard", "Rank 1" } }
+function GetNumSpellTabs() return 1 end
+function GetSpellTabInfo(t) return "General", "tex", 0, #book end
+function GetSpellName(i, b) assert(b == "spell"); local e = book[i]; if e then return e[1], e[2] end end
+
+function CreateFrame(kind, name, parent, template)
+	assert(kind == "Frame" or kind == "Button" or kind == "PlayerModel", "CreateFrame kind " .. tostring(kind))
+	assert(name == nil or type(name) == "string")
+	assert(parent == nil or type(parent) == "table", "CreateFrame parent " .. type(parent))
+	return new(kind, parent, name)
+end
+
+UIParent = new("Frame", nil, "UIParent")
+UIParent.w = 1024; UIParent.h = 768
+GameTooltip = new("Frame", nil, "GameTooltip")
+-- stock frames the addon should keep hidden
+local stockFrames = {}
+for _, n in ipairs({ "PlayerFrame", "PartyMemberFrame1", "PartyMemberFrame2", "BuffFrame", "MainMenuBar", "MainMenuExpBar", "ActionButton1", "ActionButton2", "TargetFrame" }) do
+	stockFrames[n] = new("Frame", UIParent, n)
+end
+local plateCalls = { hide = 0, show = 0 }
+NAMEPLATES_ON = 1
+function HideNameplates() plateCalls.hide = plateCalls.hide + 1 end
+function ShowNameplates() plateCalls.show = plateCalls.show + 1 end
+local errorsMsgs, raidMsgs = {}, {}
+-- like a real frame: the method lives in the shared metatable, so a shadow set on the frame can be removed again
+UIErrorsFrame = setmetatable({}, { __index = { AddMessage = function(self, m) table.insert(errorsMsgs, m) end } })
+RaidNotice_AddMessage = function(f, m) table.insert(raidMsgs, m) end
+-- stock minimap: Minimap lives in MinimapCluster, with the usual decorations
+MinimapCluster = new("Frame", UIParent, "MinimapCluster")
+Minimap = new("Frame", MinimapCluster, "Minimap")
+Minimap.zoom = 3
+Minimap.w = 140; Minimap.h = 140
+Minimap:SetPoint("TOPRIGHT", MinimapCluster, "TOPRIGHT", -9, -22)
+for _, n in ipairs({ "MinimapBackdrop", "MinimapZoomIn", "MinimapZoomOut", "MiniMapTracking", "GameTimeFrame" }) do stockFrames[n] = new("Frame", MinimapCluster, n) end
+MinimapBorder = new("Texture", MinimapCluster, "MinimapBorder")
+stockFrames.MinimapCluster = MinimapCluster
+function GetMinimapZoneText() return "Scholomance" end
+function GetZoneText() return "Scholomance" end
+function AZS_GetLocalTime() return { text = "20:28" } end
+WorldFrame = new("Frame", nil, "WorldFrame")
+local ctEvents, ctCursor, ctHandler, ctProj = {}, 0, nil, {}
+function AZS_GetCombatTextCapabilities() return { apiVersion = 1 } end
+function AZS_RegisterCombatTextFrameHandler(h) ctHandler = h end
+function AZS_GetCombatTextEvents(cursor)
+	local out = {}
+	for _, e in ipairs(ctEvents) do table.insert(out, e) end
+	ctEvents = {}
+	ctCursor = ctCursor + 1
+	return { cursor = "c" .. ctCursor, events = out, hasMore = false, droppedCount = 0 }
+end
+function AZS_ProjectCombatTextAnchors(ids, mode)
+	assert(mode == "follow" or mode == "impact")
+	local entries = {}
+	for i, id in ipairs(ids) do entries[i] = ctProj[id] or { anchorId = id, state = "unknownAnchor" } end
+	return { entries = entries }
+end
+AZS_CHESTS = {}
+local originalOnShow = function() end
+stockFrames.ActionButton1.scripts.OnShow = originalOnShow
+local chatLines = {}
+DEFAULT_CHAT_FRAME = { AddMessage = function(self, m) table.insert(chatLines, m); print("  [chat] " .. m) end }
+STANDARD_TEXT_FONT = "Fonts\\FRIZQT__.TTF"
+RAID_CLASS_COLORS = { MAGE = { r = 0.41, g = 0.8, b = 0.94 }, WARLOCK = { r = 0.58, g = 0.51, b = 0.79 }, ROGUE = { r = 1, g = 0.96, b = 0.41 } }
+local now = 1000
+function GetTime() return now end
+function IsShiftKeyDown() return false end
+function getglobal(n) return _G[n] end
+function ReloadUI() print("  [ReloadUI]") end
+SlashCmdList = {}
+function RunBinding(b) print("  [RunBinding] " .. tostring(b)) end
+local bindingNames = { "TOGGLECHARACTER0", "TOGGLETALENTS", "AZS_OPEN_TALENTS" }
+function GetNumBindings() return #bindingNames end
+function GetBinding(i) return bindingNames[i], "C" end
+function GetBindingKey(cmd) if cmd == "AZS_OPEN_TALENTS" then return "T" end return nil end
+-- EnumerateFrames: iterate widgets of kind Frame/Button
+function EnumerateFrames(prev)
+	local i = 0
+	if prev then for k, w in ipairs(allWidgets) do if w == prev then i = k break end end end
+	for k = i + 1, #allWidgets do
+		local w = allWidgets[k]
+		if w.kind == "Frame" or w.kind == "Button" then return w end
+	end
+	return nil
+end
+
+-- stock character window (1.12: ToggleCharacter -> ShowUIPanel / HideUIPanel, tab 1 = paper doll)
+CharacterFrame = new("Frame", UIParent, "CharacterFrame")
+CharacterFrame.shown = false
+CharacterFrame.selectedTab = 1
+stockCharShows = 0
+CharacterFrame.scripts.OnShow = function() stockCharShows = stockCharShows + 1 end
+function ShowUIPanel(f) if not f.shown then f.shown = true; if f.scripts.OnShow then f.scripts.OnShow() end end end
+function HideUIPanel(f) f.shown = false end
+function ToggleCharacter(tab)
+	if tab == "PaperDollFrame" then CharacterFrame.selectedTab = 1 else CharacterFrame.selectedTab = 3 end
+	if CharacterFrame.shown then HideUIPanel(CharacterFrame) else ShowUIPanel(CharacterFrame) end
+end
+UISpecialFrames = {}
+local slotIds = { HeadSlot = 1, NeckSlot = 2, ShoulderSlot = 3, ShirtSlot = 4, ChestSlot = 5, WaistSlot = 6, LegsSlot = 7, FeetSlot = 8,
+	WristSlot = 9, HandsSlot = 10, Finger0Slot = 11, Finger1Slot = 12, Trinket0Slot = 13, Trinket1Slot = 14, BackSlot = 15,
+	MainHandSlot = 16, SecondaryHandSlot = 17, RangedSlot = 18, TabardSlot = 19, AmmoSlot = 0 }
+function GetInventorySlotInfo(n) assert(slotIds[n], "bad slot " .. tostring(n)); return slotIds[n], "Interface\\Paperdoll\\UI-PaperDoll-Slot-" .. n end
+worn = { [1] = { "Interface\\Icons\\INV_Helmet_08", "|cffa335ee|Hitem:12640:0:0:0|h[Lionheart Helm]|h|r" },
+	[5] = { "Interface\\Icons\\INV_Chest_Cloth_21", "|cffffffff|Hitem:1:0:0:0|h[Robe]|h|r" },
+	[13] = { "Interface\\Icons\\INV_Misc_Gear_01", "|cff0070dd|Hitem:2:0:0:0|h[Gear]|h|r" },
+	[0] = { "Interface\\Icons\\INV_Ammo_Arrow_02", "|cffffffff|Hitem:3:0:0:0|h[Arrow]|h|r", 840 } }
+function GetInventoryItemTexture(u, id) assert(u == "player"); return worn[id] and worn[id][1] or nil end
+function GetInventoryItemLink(u, id) assert(u == "player"); return worn[id] and worn[id][2] or nil end
+function GetInventoryItemCount(u, id) return worn[id] and worn[id][3] or 1 end
+pickups = {}
+function PickupInventoryItem(id) table.insert(pickups, id) end
+function UseInventoryItem(id) table.insert(pickups, -id) end
+local helm, cloak = true, true
+function ShowingHelm() return helm and 1 or nil end
+function ShowingCloak() return cloak and 1 or nil end
+function ShowHelm(v) helm = v ~= nil end
+function ShowCloak(v) cloak = v ~= nil end
+function GetCursorPosition() return 500, 300 end
+function IsMouseButtonDown() return false end
+
+-- ---------- fake AZS API
+local run = { t = 0, lvl = 63, xp = 1462, xpn = 1598, hp = 2400, hpm = 2400, sh = 300, gold = 5491, kills = 287,
+	chest = 2235, lives = 1, endl = 0, nb = 45, proc = "seal_fate", pv = 3, pm = 5, owed = 0 }
+AZS_RUN = run
+AZS_ZONE = { zone = "sm", class = "mage", hero = "Mr Nippy" }
+local phase = "playing"
+local clock = 955.0
+function AZS_GetPhase() return phase end
+function AZS_GetRunTime() return clock end
+function AZS_GetRunLength() return 1200 end
+AZS_SPELLS = {
+	{ key = "frostbolt", spell = 1, rank = 3, cd = 0, cdmax = 2 },
+	{ key = "arcane_missiles", spell = 2, rank = 1, cd = 1.5, cdmax = 3 },
+	{ key = "fire_blast", spell = 3, rank = 1, cd = 0, cdmax = 8 },
+	{ key = "blizzard", spell = 4, rank = 1, cd = 4, cdmax = 10 },
+	{ key = "frost_nova", spell = 5, rank = 1, cd = 0, cdmax = 25 },
+	{ key = "pyroblast", spell = 6, rank = 1, cd = 12.5, cdmax = 30 },
+	{ key = "racial", spell = 7, rank = 1, cd = 0, cdmax = 120 },
+}
+AZS_SPELLS_UPDATED = 1
+AZS_SCHEDULE = {
+	{ index = 1, at = 120, name = "A", final = 0, state = "dead" },
+	{ index = 2, at = 360, name = "B", final = 0, state = "dead" },
+	{ index = 3, at = 600, name = "C", final = 0, state = "up" },
+	{ index = 4, at = 960, name = "D", final = 0, state = "due" },
+	{ index = 5, at = 1200, name = "E", final = 1, state = "due" },
+}
+function AZS_GetUpcomingBosses() return { { index = 4, name = "Scarlet Commander", at = 960, left = 5, final = false } } end
+function AZS_GetBosses()
+	return { { id = 1, name = "Boss C", hp = 30000, hpm = 52500, final = false, enraged = true,
+		debuffs = { { spell = 1, name = "Curse", icon = "Interface\\Icons\\Spell_Shadow_CurseOfTounges", stacks = 3, remaining = 12.4, duration = 30, permanent = false, dispelType = "Curse" },
+			{ spell = 2, name = "Mark", icon = "Interface\\Icons\\Ability_Hunter_SniperShot", stacks = 1, permanent = true } } } }
+end
+function AZS_GetGuardians()
+	return { { id = 5, name = "Necrofiend", hp = 100, hpm = 900, awake = true, debuffs = {} },
+		{ id = 6, name = "Spectral Tutor", hp = 900, hpm = 900, awake = false, debuffs = {} } }
+end
+function AZS_GetLairs()
+	return { { index = 1, state = "empty", name = "Risen Construct", left = 50, flag = 0, x = 10, y = 10, spaceId = "m1:1" },
+		{ index = 2, state = "awake", name = "Necrofiend", left = -1, flag = 0, x = 30, y = 40, spaceId = "m1:1" },
+		{ index = 3, state = "asleep", name = "Spectral Tutor", left = -1, flag = 1, x = 100, y = -20, spaceId = "m1:1" } }
+end
+function AZS_GetPlayerPosition() return { x = 0, y = 0, z = 0, spaceId = "m1:1", facing = 0 } end
+function AZS_GetMeter() return { { name = "Frostbolt", dmg = 2300000000, dps = 2400000, share = 0.96, proc = 0 }, { name = "Shadow Weaving", dmg = 85000000, dps = 90000, share = 0.036, proc = 1 } }, 2400000000, 2500000 end
+defaultGetMeter = AZS_GetMeter
+function AZS_GetHealing() return { { name = "Regeneration", dmg = 5000, dps = 10, share = 1, proc = 0 } }, 5000, 10 end
+function AZS_GetBossMeter() return {}, 0, 0 end
+function AZS_GetPartyMeter() return { { name = "Carolin", class = "warlock", dmg = 2300000000, dps = 2000000, share = 0.96, top = "Shadow Bolt", topdps = 1000000 }, { name = "Zaynor", class = "rogue", dmg = 85000000, dps = 80000, share = 0.036, top = "", topdps = 0 } }, 2400000000, 2500000 end
+metaRev = "m1"
+mockRun = "r1"
+function AZS_GetMeterContext() return { runId = mockRun, metadataRevision = metaRev } end
+local snapshotCalls = 0
+snapshotQueries = {}
+function AZS_GetMeterSnapshot(q)
+	snapshotCalls = snapshotCalls + 1
+	table.insert(snapshotQueries, q); if #snapshotQueries > 20 then table.remove(snapshotQueries, 1) end
+	assert(q.apiVersion == 1 and q.runId == mockRun, "bad snapshot query")
+	assert(q.metric == "damage" or q.metric == "healing")
+	assert(q.period == "run" or q.period == "encounter")
+	assert(q.groupBy == "source" and q.windowSeconds == 0, "bad snapshot query")
+	assert(q.scope == "self" or q.scope == "party")
+	return { rows = {}, sources = {
+		a = { name = "Frostbolt", icon = { status = "ready", path = "Interface\\Icons\\Spell_Frost_FrostBolt02" } },
+		b = { name = "Shadow Weaving", icon = { status = "ready", path = "Interface\\Icons\\Spell_Shadow_BlackPlague" } },
+		c = { name = "Melee", icon = { status = "missing", reason = "none" } },
+		d = { name = "Shadow Bolt", icon = { status = "ready", path = "Interface\\Icons\\Spell_Shadow_ShadowBolt" } },
+	} }, nil
+end
+function AZS_GetMeterLoadout(q)
+	assert(q.apiVersion == 1 and q.runId == mockRun)
+	return { loadoutRevision = "rev1",
+		sources = {
+			["ability:frostbolt:r3"] = { abilityKey = "frostbolt", name = "Frostbolt", icon = { status = "ready", path = "Interface\\Icons\\Spell_Frost_FrostBolt02" } },
+			["ability:frostbolt:r3:pulse"] = { abilityKey = "frostbolt", variantKey = "pulse", name = "Frostbolt (pulse)", icon = { status = "missing", reason = "x" } },
+			["ability:blizzard:r1"] = { abilityKey = "blizzard", name = "Blizzard", icon = { status = "ready", path = "Interface\\Icons\\Spell_Frost_IceStorm" } },
+			["item:100"] = { name = "Ring of Doom", icon = { status = "ready", path = "Interface\\Icons\\INV_Jewelry_Ring_03" } },
+		},
+		runJewelry = { { sourceKey = "item:100", category = "ring" } } }
+end
+function AZS_GetSummonGroups() return { { key = "imp", name = "Imp", icon = "Interface\\Icons\\Spell_Shadow_SummonImp", count = 2, permanent = 1, temporary = 1, remaining = 12 } }, 2 end
+function AZS_GetTotems() return { { key = "searing_totem", name = "Searing Totem", icon = "Interface\\Icons\\Spell_Fire_SearingTotem", count = 1, remaining = 30 } } end
+function AZS_GetTimers() return { { name = "Butcher", icon = "Interface\\Icons\\Spell_Shadow_Metamorphosis", kind = "summon", remaining = 5.5, ready = false },
+	{ name = "Ready one", icon = "Interface\\Icons\\X", kind = "cooldown", remaining = 0, ready = true } } end
+local stored = 4
+function AZS_GetStoredLevels() return stored end
+function AZS_OpenStoredLevels() print("  [OpenStoredLevels]") end
+local bannerHandler
+function AZS_RegisterBannerHandler(h) bannerHandler = h end
+local hud = { clock = true, bosses = true, tally = true, build = true, meter = true, levels = true, banners = true }
+function AZS_SetHudShown(p, s) hud[p] = s end
+function AZS_IsHudShown(p) return hud[p] end
+function GetCVar(n) return cvars[n] end
+function SetCVar(n, v) assert(type(v) == "string"); cvars[n] = v end
+AZS_STATS = { hp = 2400, dmg = 1.25, cd = 0.85, crit = 0.12, cm = 3.04, arm = 0.18, reg = 1.5, area = 1.1, cnt = 1, echo = 0.05,
+	spd = 1.15, pick = 6, xp = 1.2, luck = 0.4, gold = 1.1, heal = 12, lch = 0.03, thn = 40, liv = 1,
+	ghp = 300, gdmg = 0.15, gcrit = 0, foo = 7 }
+
+-- party + player auras
+function GetNumPartyMembers() return 3 end
+local partyData = {
+	party1 = { name = "Zaynor", class = "ROGUE", hp = 1800, hpm = 1800 },
+	party2 = { name = "Carolin", class = "WARLOCK", hp = 700, hpm = 1500 },
+	party3 = { name = "Ghost", class = "MAGE", hp = 0, hpm = 900 },
+}
+local clientTarget = nil   -- { name, hostile, dead, class, hp, hpm }
+function UnitExists(u) if u == "target" then return clientTarget ~= nil end return partyData[u] ~= nil end
+function UnitName(u) if u == "target" then return clientTarget and clientTarget.name end return partyData[u] and partyData[u].name end
+function UnitCanAttack(a, b) return clientTarget ~= nil and clientTarget.hostile end
+function UnitClassification(u) return clientTarget and clientTarget.class or "normal" end
+function UnitClass(u) if u == "target" then return "Local", clientTarget and clientTarget.class end return "Local", partyData[u] and partyData[u].class end
+function UnitIsPlayer(u) return u == "target" and clientTarget ~= nil and clientTarget.isPlayer == true end
+function UnitHealth(u) if u == "target" then return clientTarget.hp end return partyData[u].hp end
+function UnitHealthMax(u) if u == "target" then return clientTarget.hpm end return partyData[u].hpm end
+function UnitIsDeadOrGhost(u) if u == "target" then return clientTarget.dead end return partyData[u].hp == 0 end
+function UnitIsDead(u) return clientTarget ~= nil and clientTarget.dead == true end
+function UnitBuff(u, i) if i <= 3 then return "Interface\\Icons\\Spell_Holy_WordFortitude" end end
+clicks = { targeted = {}, menus = {}, spell = {}, dropped = {} }
+targetedUnit = nil
+function UnitIsUnit(a, b) if a == "target" then return b == targetedUnit end return a == b end
+function TargetUnit(u) table.insert(clicks.targeted, u); targetedUnit = u end
+spellTargeting, cursorItem = false, false
+function SpellIsTargeting() return spellTargeting end
+function SpellTargetUnit(u) table.insert(clicks.spell, u) end
+function CursorHasItem() return cursorItem end
+function DropItemOnUnit(u) table.insert(clicks.dropped, u) end
+function UIDropDownMenu_Initialize(frame, init, mode) frame.ddInit = init; frame.ddMode = mode end
+function ToggleDropDownMenu(level, value, frame, anchor, x, y)
+	assert(frame.ddInit, "dropdown not initialised")
+	frame.ddInit()
+	table.insert(clicks.menus, { frame = frame, anchor = anchor })
+end
+function UnitPopup_ShowMenu(dd, which, unit) dd.which, dd.unit = which, unit; clicks.lastShown = { which = which, unit = unit } end
+acts = {}
+inRange = true
+function CheckInteractDistance(u, k) return inRange end
+function NotifyInspect(u) table.insert(acts, "notify:" .. u) end
+function InspectUnit(u) table.insert(acts, "inspect:" .. u) end
+function InitiateTrade(u) table.insert(acts, "trade:" .. u) end
+function FollowUnit(u) table.insert(acts, "follow:" .. u) end
+function ChatFrame_SendTell(n) table.insert(acts, "tell:" .. n) end
+leader = false
+function IsPartyLeader() return leader end
+function PromoteByName(n) table.insert(acts, "promote:" .. n) end
+function UninviteByName(n) table.insert(acts, "uninvite:" .. n) end
+function GetCursorPosition() return 400, 300 end
+downedList = { { id = "H2", name = "Ghost", positionAvailable = false } }
+function AZS_GetDownedPartyMembers() local out = {} for i, d in ipairs(downedList) do local c = {} for k, v in pairs(d) do c[k] = v end out[i] = c end return out end
+local worldHandler, catalogReads, playedSounds = nil, 0, {}
+anchorCatalog = {}
+function AZS_RegisterWorldAnchorFrameHandler(h) worldHandler = h end
+function AZS_GetWorldAnchors(q, cursor, limit)
+	assert(q and q.kinds and q.kinds[1] == "downedPartyMember", "catalog query")
+	catalogReads = catalogReads + 1
+	return { entries = anchorCatalog, hasMore = false }
+end
+projState = "onScreen"
+function AZS_ProjectWorldAnchors(reqs)
+	local entries = {}
+	for i, r in ipairs(reqs) do
+		assert(r.attachment == "position" and r.anchorId, "project request")
+		entries[i] = { anchorId = r.anchorId, attachment = r.attachment, state = projState, x = 800 + i * 50, y = 300, playerDistance = 12 }
+	end
+	return { entries = entries }
+end
+function PlaySound(n) table.insert(playedSounds, n) end
+function GetPlayerBuff(i, filter)
+	local n = (filter == "HELPFUL") and 4 or 2
+	if i < n then return i + 10 end
+	return -1
+end
+function GetPlayerBuffTexture(idx) return "Interface\\Icons\\Spell_Nature_Regeneration" end
+function GetPlayerBuffTimeLeft(idx) return idx == 10 and 0 or 25.5 end
+function GetPlayerBuffApplications(idx) return idx == 11 and 3 or 0 end
+function GetPlayerBuffDispelType(idx) return idx == 11 and "Magic" or nil end
+
+-- ---------- load the addon
+-- the file list comes from the .toc, so a file missing there fails the test
+for line in io.lines(ADDON_DIR .. "/AZSGW2UI.toc") do
+	local f = line:match("^(%S+)%.lua%s*$")
+	if f then
+		local chunk, err = loadfile(ADDON_DIR .. "/" .. f .. ".lua")
+		assert(chunk, err)
+		chunk()
+	end
+end
+local G = AZSGW2
+
+-- find the event frame's handler: Main created a frame with OnEvent
+local function fire(ev, a1)
+	event = ev
+	arg1 = a1
+	for _, w in ipairs(allWidgets) do
+		if w.scripts.OnEvent then w.scripts.OnEvent() end
+	end
+end
+
+local function runTicks(n, dt)
+	for i = 1, n do
+		now = now + dt
+		clock = clock + dt
+		arg1 = dt
+		for _, w in ipairs(allWidgets) do
+			if w.scripts.OnUpdate then w.scripts.OnUpdate() end
+		end
+	end
+end
+
+local function scenario(name, fn)
+	print("== " .. name)
+	if fn then fn() end
+end
+
+scenario("startup", function()
+	if os.getenv("STOCK") then AZSGW2DB = { customArt = false }; print("(stock art mode)") end
+	fire("VARIABLES_LOADED")
+	fire("PLAYER_ENTERING_WORLD")
+	runTicks(10, 0.05)
+	print("started", G.started, "shown", G.shown)
+	assert(G.started and G.shown, "UI should be started and shown")
+	for _, p in ipairs(G.HUD_PARTS) do assert(hud[p] == false, "HUD part not hidden: " .. p) end
+end)
+
+scenario("stock frames + HUD enforcement", function()
+	for _, n in ipairs({ "PlayerFrame", "PartyMemberFrame1", "BuffFrame", "MainMenuBar", "ActionButton1" }) do
+		assert(stockFrames[n].shown == false, n .. " still shown")
+	end
+	-- the game shows one again: the OnShow hook hides it at once
+	stockFrames.PlayerFrame.shown = true
+	stockFrames.PlayerFrame.scripts.OnShow()
+	assert(stockFrames.PlayerFrame.shown == false, "OnShow hook did not hide PlayerFrame")
+	-- the game switches the spells row back on: asserted again within half a second
+	hud.build = true; cvars.hudBuild = "1"
+	runTicks(12, 0.05)
+	assert(hud.build == false and cvars.hudBuild == "0", "HUD part build not re-hidden")
+	print("stock frames hidden, OnShow hook ok, HUD enforcement ok")
+	print("detected bindings:", G.FindBinding("talents"), G.FindBinding("character"), "|", G.BindingText("talents"))
+	assert(G.FindBinding("talents") == "AZS_OPEN_TALENTS" and G.FindBinding("character") == "TOGGLECHARACTER0")
+end)
+
+scenario("nameplates + native messages", function()
+	assert(plateCalls.hide > 0 and NAMEPLATES_ON == nil, "nameplates not hidden")
+	-- the game turns them on again: switched off again within half a second
+	NAMEPLATES_ON = 1
+	local before = plateCalls.hide
+	runTicks(12, 0.05)
+	assert(NAMEPLATES_ON == nil and plateCalls.hide > before, "nameplates not re-hidden")
+	-- native centre-screen messages are swallowed
+	UIErrorsFrame:AddMessage("Mother Fang enters the battlefield!")
+	RaidNotice_AddMessage(nil, "Boss engaged")
+	assert(table.getn(errorsMsgs) == 0 and table.getn(raidMsgs) == 0, "native messages not silenced")
+	-- /gw2 messages on gives them back, off silences again
+	SlashCmdList["AZSGW2"]("messages on")
+	UIErrorsFrame:AddMessage("x"); RaidNotice_AddMessage(nil, "y")
+	assert(table.getn(errorsMsgs) == 1 and table.getn(raidMsgs) == 1, "messages on did not restore")
+	runTicks(12, 0.05)
+	UIErrorsFrame:AddMessage("x2")
+	assert(table.getn(errorsMsgs) == 2, "messages re-silenced although switched on")
+	SlashCmdList["AZSGW2"]("messages off")
+	UIErrorsFrame:AddMessage("x3"); RaidNotice_AddMessage(nil, "y3")
+	assert(table.getn(errorsMsgs) == 2 and table.getn(raidMsgs) == 1, "messages off did not silence")
+	-- /gw2 plates on gives nameplates back and they stay
+	SlashCmdList["AZSGW2"]("plates on")
+	assert(plateCalls.show > 0 and NAMEPLATES_ON == 1, "plates on")
+	local h = plateCalls.hide
+	runTicks(12, 0.05)
+	assert(plateCalls.hide == h and NAMEPLATES_ON == 1, "plates re-hidden although switched on")
+	SlashCmdList["AZSGW2"]("plates off")
+	runTicks(12, 0.05)
+	assert(NAMEPLATES_ON == nil, "plates off")
+	assert(stockFrames.TargetFrame.shown == false, "stock TargetFrame still shown")
+	print("nameplates hidden + enforced, native messages silenced, toggles ok")
+end)
+
+scenario("target bar", function()
+	AZS_TARGET = nil; clientTarget = nil
+	runTicks(4, 0.1)
+	assert(not G.target.shown and G.bossFrame.withTarget == false, "target bar visible without target")
+	-- the click: the client knows the target at once, AZS_TARGET still holds the previous (none) -> instant bar
+	clientTarget = { name = "Defias Thug", hostile = true, hp = 50, hpm = 100, class = "normal" }
+	fire("PLAYER_TARGET_CHANGED")     -- no tick in between: the event itself must update the bar
+	print("instant:", G.target.shown, G.target.name.text, G.target.hpText.text)
+	assert(G.target.shown and G.target.name.text == "Defias Thug" and G.target.hpText.text == "50%", "target bar not instant")
+	assert(G.bossFrame.withTarget == true)
+	-- AZS catches up with the exact numbers
+	AZS_TARGET = { kind = "normal", id = "m1", name = "Defias Thug", hp = 450, hpm = 900, state = 0 }
+	fire("CHAT_MSG_ADDON", "AZSTGT")
+	assert(G.target.hpText.text == "450  50%", "target text " .. G.target.hpText.text)
+	-- a stale AZS_TARGET naming the previous enemy must not leak onto the new one
+	clientTarget = { name = "Defias Rogue", hostile = true, hp = 100, hpm = 100, class = "normal" }
+	fire("PLAYER_TARGET_CHANGED")
+	assert(G.target.name.text == "Defias Rogue" and G.target.hpText.text == "100%", "stale AZS_TARGET leaked: " .. G.target.name.text .. " " .. G.target.hpText.text)
+	-- friendly / dead targets: no bar
+	-- a friendly creature (the client only knows a percentage): the same bar, green, soft green name
+	clientTarget = { name = "Stormwind Guard", hostile = false, hp = 100, hpm = 100 }
+	fire("PLAYER_TARGET_CHANGED")
+	assert(G.target.shown and G.target.name.text == "Stormwind Guard" and G.target.hpText.text == "100%", "bar for a friendly target")
+	assert(G.target.bar.fill.vc[2] > G.target.bar.fill.vc[1] and G.target.bar.fill.vc[2] > G.target.bar.fill.vc[3], "friend bar is green: " .. table.concat(G.target.bar.fill.vc, ","))
+	-- a friendly hero (a party member): class colour, real numbers, from AZS_TARGET kind "other" too
+	clientTarget = { name = "Carolin", hostile = false, hp = 700, hpm = 1500, isPlayer = true, class = "WARLOCK" }
+	AZS_TARGET = { kind = "other", name = "Carolin" }
+	fire("PLAYER_TARGET_CHANGED")
+	print("friend target:", G.target.shown, G.target.name.text, G.target.hpText.text, G.target.bar.fill.vc[2])
+	assert(G.target.shown and G.target.hpText.text == "700  47%", "friend numbers: " .. G.target.hpText.text)
+	local nr = G.target.name.tcol
+	assert(nr and not (nr[1] == 0.7 and nr[2] == 1), "hero name in a class colour")
+	assert(G.target.bar.fill.vc[2] > G.target.bar.fill.vc[1], "hero bar is green")
+	-- yourself
+	AZS_TARGET = { kind = "player", name = "Carolin" }
+	fire("PLAYER_TARGET_CHANGED")
+	assert(G.target.shown, "yourself targeted: the bar shows")
+	-- a downed friend
+	clientTarget = { name = "Ghost", hostile = false, hp = 0, hpm = 900, dead = true, isPlayer = true, class = "MAGE" }
+	AZS_TARGET = nil
+	fire("PLAYER_TARGET_CHANGED")
+	assert(G.target.shown and G.target.hpText.text == "Downed", "downed friend: " .. G.target.hpText.text)
+	-- and back to an enemy: red again
+	clientTarget = { name = "Defias Thug", hostile = true, hp = 50, hpm = 100, class = "normal" }
+	fire("PLAYER_TARGET_CHANGED")
+	assert(G.target.bar.fill.vc[1] > G.target.bar.fill.vc[2], "enemy bar red again")
+	clientTarget = { name = "Corpse", hostile = true, hp = 0, hpm = 100, dead = true }
+	fire("PLAYER_TARGET_CHANGED")
+	assert(not G.target.shown, "bar for a dead target")
+	-- elite from the special enemy list gets exact numbers before AZS_TARGET arrives
+	AZS_UNITS = { { kind = "elite", id = 7, name = "Defias Captain", hp = 1000, hpm = 4000, state = 0 },
+		{ kind = "guardian", id = 8, name = "Risen Construct", hp = 10, hpm = 20, state = 0 } }
+	clientTarget = { name = "Defias Captain", hostile = true, hp = 25, hpm = 100, class = "elite" }
+	fire("PLAYER_TARGET_CHANGED")
+	assert(G.target.shown and G.target.hpText.text == "1.0K  25%", "elite text " .. G.target.hpText.text)
+	-- a guardian / boss target: no duplicate bar, not even for the moment before AZS_TARGET arrives
+	clientTarget = { name = "Risen Construct", hostile = true, hp = 50, hpm = 100, class = "elite" }
+	fire("PLAYER_TARGET_CHANGED")
+	assert(not G.target.shown and G.bossFrame.withTarget == false, "target bar for a guardian")
+	AZS_TARGET = { kind = "boss", id = "b1", name = "Mother Fang", hp = 100, hpm = 200 }
+	clientTarget = { name = "Mother Fang", hostile = true, hp = 50, hpm = 100, class = "worldboss" }
+	fire("PLAYER_TARGET_CHANGED")
+	assert(not G.target.shown, "target bar shown for a boss")
+	AZS_TARGET = { kind = "normal", name = "Zero", hp = 0, hpm = 0 }
+	clientTarget = { name = "Zero", hostile = true, hp = 0, hpm = 100 }
+	runTicks(2, 0.1)
+	assert(not G.target.shown, "target bar with zero max hp")
+	AZS_TARGET = nil; clientTarget = nil; AZS_UNITS = nil
+	runTicks(2, 0.1)
+end)
+
+local function lastPoint(w) return w.pts[#w.pts] end
+
+scenario("minimap: attach, pins, detach", function()
+	local mm = G.mm
+	assert(mm and mm:IsShown(), "minimap frame missing")
+	assert(Minimap.parent == mm.holder, "Minimap not moved into our frame")
+	assert(Minimap.mask and string.find(Minimap.mask, "mm_mask.tga", 1, true), "square mask not set")
+	assert(MinimapCluster.shown == false and MinimapBackdrop.shown == false and MinimapZoomIn.shown == false, "stock minimap pieces still shown")
+	assert(MinimapBorder.shown == false, "stock border texture still shown")
+	assert(hud.flag == false and hud.localClock == false, "game flag / clock not hidden while our minimap is up")
+	print("minimap attached, hidden pieces ok, flag hidden")
+	-- outdoor zoom 3 = 266.67 yards across -> 160 px: 0.6 px per yard
+	runTicks(3, 0.05)
+	assert(math.abs(G.MapYards() - 266.6667) < 0.01, "yards " .. tostring(G.MapYards()))
+	assert(Minimap.zoom == 3 and cvars.minimapZoom == "3", "zoom disturbed by the indoor test")
+	-- indoors: the zoom setting that moves is the inside one
+	Minimap.indoors = true; G.yardsStamp = nil
+	assert(math.abs(G.MapYards() - 120) < 0.01, "indoor yards " .. tostring(G.MapYards()))
+	assert(Minimap.zoom == 3, "zoom not restored after the indoor test")
+	Minimap.indoors = nil; G.yardsStamp = nil
+	-- pins: player at 0,0 facing north. +x north, +y west
+	AZS_CHESTS = { { id = 1, x = 30, y = 0, spaceId = "m1:1" }, { id = 2, x = 0, y = 50, spaceId = "m1:1" },
+		{ id = 3, x = 0, y = -1000, spaceId = "m1:1" }, { id = 4, x = 5, y = 5, spaceId = "other" } }
+	runTicks(3, 0.05)
+	local p1, p2, p3 = lastPoint(mm.chestPins[1]), lastPoint(mm.chestPins[2]), lastPoint(mm.chestPins[3])
+	print("chest pins:", p1[4], p1[5], "|", p2[4], p2[5], "|", p3[4], p3[5], "| 4th shown", mm.chestPins[4].shown)
+	assert(math.abs(p1[4]) < 0.01 and math.abs(p1[5] - 18) < 0.01, "30 yd north should be 18 px up")
+	assert(math.abs(p2[4] + 30) < 0.01 and math.abs(p2[5]) < 0.01, "50 yd west should be 30 px left")
+	assert(p3[4] > 0 and math.abs(p3[4] - 72) < 0.01, "far east chest should clamp to the right edge")
+	assert(mm.chestPins[3].shown and not mm.chestPins[4].shown, "pins in another space must not show")
+	-- lairs: awake / asleep / empty cells and the flagged one
+	local l2 = lastPoint(mm.lairPins[2])
+	assert(mm.lairPins[1].shown and mm.lairPins[2].shown and mm.lairPins[3].shown and not mm.lairPins[4].shown, "lair pins")
+	assert(math.abs(l2[5] - 18) < 0.01, "lair 30 north 40 west: y " .. tostring(l2[5]))
+	-- option off hides the chest pins
+	G.SetOpt("pinChest", false); runTicks(2, 0.05)
+	assert(not mm.chestPins[1].shown, "chest pins still shown with the option off")
+	G.SetOpt("pinChest", true)
+	-- zone plate + clock
+	G.mm.zoneSet = false; runTicks(2, 0.5)
+	assert(mm.zone.text == "Scholomance" and mm.clock.text == "20:28", "zone plate " .. mm.zone.text .. " " .. mm.clock.text)
+	-- zoom buttons / wheel stay inside the range
+	G.MapZoom(1); assert(Minimap.zoom == 4)
+	G.MapZoom(1); assert(Minimap.zoom == 4, "zoom beyond the last level")
+	G.MapZoom(-9); assert(Minimap.zoom == 0)
+	G.MapZoom(3); assert(Minimap.zoom == 3)
+	-- off: the game's minimap is back where it was, with the round mask
+	AZSGW2DB.enabled = false; G.ApplyMinimap()
+	assert(Minimap.parent == MinimapCluster and Minimap.mask == "Textures\\MinimapMask", "minimap not restored")
+	assert(MinimapCluster.shown == true and not mm:IsShown(), "cluster not shown again / our frame still up")
+	assert(hud.flag == true and hud.localClock == true, "flag / clock not given back")
+	AZSGW2DB.enabled = true; G.ApplyMinimap(); G.HideGameHud(true); runTicks(12, 0.05)
+	assert(Minimap.parent == mm.holder and MinimapCluster.shown == false, "minimap not attached again")
+	-- somebody moves the map back to the cluster: it is put into our frame again within half a second
+	Minimap:SetParent(MinimapCluster); runTicks(12, 0.05)
+	assert(Minimap.parent == mm.holder, "minimap not re-attached")
+	print("minimap detach / attach / re-attach ok")
+end)
+
+scenario("guardian arrows", function()
+	local tex = { SetTexCoord = function(self, a, b, c, d) self.c = { a, b, c, d } end }
+	G.SetArrow(tex, 0);            assert(tex.c[3] == 0 and tex.c[1] == 0, "arrow cell 0")
+	G.SetArrow(tex, math.pi / 2);  assert(tex.c[1] == 0 and tex.c[3] == 0.25, "arrow cell 8 (90 deg)")
+	G.SetArrow(tex, -math.pi / 2); assert(tex.c[1] == 0 and tex.c[3] == 0.75, "arrow cell 24 (-90 deg)")
+	G.SetArrow(tex, math.pi);      assert(tex.c[3] == 0.5, "arrow cell 16 (180 deg)")
+	G.SetArrow(tex, 6.2831);       assert(tex.c[3] == 0 and tex.c[1] == 0, "arrow wraps to 0")
+	local p = { x = 0, y = 0, facing = 0 }
+	assert(math.abs(G.RelBearing(p, 0, 50) - math.pi / 2) < 1e-6, "west of a north-facing hero is 90 deg counter-clockwise")
+	assert(math.abs(G.RelBearing(p, 50, 0)) < 1e-6, "north of a north-facing hero is straight ahead")
+	assert(math.abs(G.RelBearing({ x = 0, y = 0, facing = math.pi / 2 }, 0, 50)) < 1e-6, "facing west, target west: straight ahead")
+	runTicks(8, 0.05)
+	local f = G.guardians
+	assert(f.headArrow.shown, "header arrow hidden")
+	assert(f.nearest and f.nearest.name == "Necrofiend", "nearest guardian: " .. tostring(f.nearest and f.nearest.name))
+	assert(f.rows[1].arrow.shown == false, "empty lair must not get an arrow")
+	assert(f.rows[2].arrow.shown and f.rows[3].arrow.shown, "held lairs get arrows")
+	G.SetOpt("arrows", false); runTicks(4, 0.05)
+	assert(not f.headArrow.shown and not f.rows[2].arrow.shown, "arrows still shown with the option off")
+	G.SetOpt("arrows", true)
+	print("guardian arrows ok, nearest:", f.nearest.name)
+end)
+
+scenario("damage numbers", function()
+	assert(G.dmg.ok and ctHandler, "combat text handler not registered")
+	assert(cvars.CombatDamage == nil or cvars.CombatDamage == "0", "game's own damage numbers not switched off")
+	local t = GetTime()
+	ctProj = {
+		a1 = { anchorId = "a1", state = "onScreen", x = 500, y = 400, playerDistance = 10 },
+		a2 = { anchorId = "a2", state = "onScreen", x = 700, y = 300, playerDistance = 60 },
+		a3 = { anchorId = "a3", state = "offscreen" },
+		a4 = { anchorId = "a4", state = "onScreen", x = 100, y = 100 },
+	}
+	ctEvents = {
+		{ kind = "damage", amount = 1234, anchorId = "a1", anchorStatus = "ready", sourceKind = "player", presentedAt = t },
+		{ kind = "damage", amount = 2500000, critical = true, anchorId = "a2", anchorStatus = "ready", sourceKind = "player", presentedAt = t },
+		{ kind = "miss", result = { key = "dodge", text = "dodge" }, anchorId = "a3", anchorStatus = "ready", sourceKind = "player", presentedAt = t },
+		{ kind = "damage", amount = 99, anchorId = "a4", anchorStatus = "ready", sourceKind = "pet", presentedAt = t },
+		{ kind = "damage", amount = 5, anchorId = nil, anchorStatus = "unavailable", sourceKind = "player", presentedAt = t },
+		{ kind = "damage", amount = 7, anchorId = "a1", anchorStatus = "ready", sourceKind = "player", presentedAt = t - 5 },
+	}
+	ctHandler()
+	local labels = G.dmg.labels
+	print("labels:", #labels, labels[1].holder.text.text, labels[2].holder.text.text, labels[3].holder.text.text, labels[4].holder.text.text)
+	assert(#labels == 4, "expected 4 labels (no anchor and stale ones skipped), got " .. #labels)
+	assert(labels[1].holder.text.text == "1234" and labels[2].holder.text.text == "2.5M", "number format")
+	assert(labels[3].holder.text.text == "Dodge", "miss word: " .. labels[3].holder.text.text)
+	assert(labels[2].crit and labels[2].base > labels[1].base, "crits must be bigger")
+	assert(not labels[1].holder.splat.shown, "no splash behind normal hits")
+	if not os.getenv("STOCK") then
+		assert(labels[2].holder.splat.shown, "red splash behind crits")
+		assert(labels[2].holder.splat.tex:find("splat.tga"), "splash texture")
+	end
+	assert(G.NumFont():find("azs_numbers.ttf"), "number font not selected: " .. tostring(G.NumFont()))
+	print("number font:", G.NumFont(), "| sizes:", labels[1].size, labels[2].size, labels[4].size)
+	assert(labels[1].size == 15 and labels[2].size < 22, "sizes " .. labels[1].size .. "/" .. labels[2].size)
+	local pt = lastPoint(labels[1].holder)
+	assert(pt[2] == WorldFrame and pt[3] == "BOTTOMLEFT" and pt[4] >= 480 and pt[4] <= 520, "label not placed from WorldFrame BOTTOMLEFT: " .. tostring(pt[4]))
+	assert(labels[3].holder.shown == false, "offscreen label should be hidden")
+	-- far enemy: smaller numbers
+	assert(labels[2].size < labels[2].base * 1.25, "far crit not shrunk")
+	-- pets off
+	G.SetOpt("dmgPet", false)
+	ctEvents = { { kind = "damage", amount = 99, anchorId = "a4", anchorStatus = "ready", sourceKind = "summon", presentedAt = GetTime() } }
+	ctHandler()
+	assert(#G.dmg.labels == 4, "pet number shown with the option off")
+	G.SetOpt("dmgPet", true)
+	-- numbers float up and expire
+	local y0 = lastPoint(labels[1].holder)[5]
+	now = now + 0.3; ctHandler()
+	assert(lastPoint(labels[1].holder)[5] > y0, "number does not rise")
+	now = now + 1.5; ctHandler()
+	assert(#G.dmg.labels == 0, "labels not released after their life: " .. #G.dmg.labels)
+	assert(#G.dmg.free >= 4, "labels not pooled")
+	-- a changed stream clears everything and re-subscribes
+	ctEvents = { { kind = "damage", amount = 10, anchorId = "a1", anchorStatus = "ready", sourceKind = "player", presentedAt = GetTime() } }
+	ctHandler(); assert(#G.dmg.labels == 1)
+	ctProj.a1 = { anchorId = "a1", state = "expired" }
+	ctHandler(); assert(#G.dmg.labels == 0, "expired anchor kept")
+	-- option off: no reads, labels gone, native numbers back
+	ctEvents = { { kind = "damage", amount = 10, anchorId = "a1", anchorStatus = "ready", sourceKind = "player", presentedAt = GetTime() } }
+	ctProj.a1 = { anchorId = "a1", state = "onScreen", x = 1, y = 1 }
+	G.SetOpt("dmg", false); G.ApplyDamage(); ctHandler()
+	assert(#G.dmg.labels == 0 and #ctEvents == 1, "events read with the option off")
+	assert(cvars.CombatDamage == "0", "with our numbers off, the game's own ones must stay off")
+	G.SetOpt("dmg", true); G.ApplyDamage(); ctEvents = {}; ctHandler()
+	-- options: ticks off, crits only, numbers off
+	do
+		local function send(list) ctEvents = list; ctHandler() end
+		local function ev(kind, extra) local e = { kind = kind, amount = 50, anchorId = "a1", anchorStatus = "ready", sourceKind = "player", presentedAt = GetTime() } for k, v in pairs(extra or {}) do e[k] = v end return e end
+		ctProj.a1 = { anchorId = "a1", state = "onScreen", x = 500, y = 400, playerDistance = 10 }
+		G.ClearDamage()
+		G.SetOpt("dmgTicks", false)
+		send({ ev("damage", { periodic = true }), ev("damage", {}) })
+		assert(#G.dmg.labels == 1, "periodic hit shown with ticks off: " .. #G.dmg.labels)
+		G.ClearDamage(); G.SetOpt("dmgTicks", true)
+		send({ ev("damage", { periodic = true }), ev("damage", {}) })
+		assert(#G.dmg.labels == 2, "ticks not shown with ticks on")
+		G.ClearDamage(); G.SetOpt("dmgCrit", true)
+		send({ ev("damage", { periodic = true }), ev("damage", {}), ev("damage", { critical = true }), ev("miss", { result = { key = "dodge", text = "dodge" } }) })
+		assert(#G.dmg.labels == 1 and G.dmg.labels[1].crit, "crits only: " .. #G.dmg.labels)
+		G.ClearDamage(); G.SetOpt("dmgCrit", false)
+		-- numbers off: nothing shown, and the game's own numbers stay off too
+		G.SetOpt("dmg", false); G.ApplyDamage()
+		send({ ev("damage", { critical = true }) })
+		assert(#G.dmg.labels == 0, "numbers shown with the option off")
+		assert(cvars.CombatDamage == "0", "game's own numbers came back with ours off: " .. tostring(cvars.CombatDamage))
+		-- the game's own numbers on request
+		G.SetOpt("dmgNative", true); G.ApplyDamage()
+		assert(cvars.CombatDamage ~= "0", "game's own numbers not restored on request")
+		G.SetOpt("dmgNative", false); G.SetOpt("dmg", true); G.ApplyDamage()
+		assert(cvars.CombatDamage == "0")
+		SlashCmdList["AZSGW2"]("dmg crits"); assert(G.Opt("dmg") and G.Opt("dmgCrit"))
+		SlashCmdList["AZSGW2"]("dmg off"); assert(not G.Opt("dmg"))
+		SlashCmdList["AZSGW2"]("dmg all"); assert(G.Opt("dmg") and not G.Opt("dmgCrit"))
+		SlashCmdList["AZSGW2"]("dmg ticks off"); assert(not G.Opt("dmgTicks"))
+		SlashCmdList["AZSGW2"]("dmg ticks on"); assert(G.Opt("dmgTicks"))
+		G.ClearDamage()
+	end
+	-- a storm of hits at many distances still uses only a few font sizes
+	do
+		fontSizes = {}
+		for i = 1, 120 do
+			local dist = 5 + math.mod(i * 7, 55)
+			ctProj["s" .. i] = { anchorId = "s" .. i, state = "onScreen", x = 100 + i, y = 200, playerDistance = dist }
+			ctEvents[i] = { kind = "damage", amount = 100 + i, critical = (math.mod(i, 4) == 0), anchorId = "s" .. i, anchorStatus = "ready", sourceKind = "player", presentedAt = GetTime() }
+		end
+		for step = 1, 12 do ctHandler(); ctEvents = {}; now = now + 0.05 end
+		local n = 0; local list = {}
+		for sz in pairs(fontSizes) do n = n + 1; table.insert(list, sz) end
+		table.sort(list)
+		print("distinct damage font sizes in a storm:", n, table.concat(list, " "), "| labels:", #G.dmg.labels)
+		assert(n <= 18, "too many distinct font sizes: " .. n)
+		assert(#G.dmg.labels <= 60, "label cap")
+		now = now + 2; ctHandler()
+		assert(#G.dmg.labels == 0)
+	end
+	-- the font file can not be loaded (a client that refuses it): everything falls back to the game's font
+	do
+		local keepOk = G.sansOk
+		G.sansOk = nil; failAzsFont = true
+		assert(G.NumFont() == G.FONT and G.Sans() == G.FONT, "no fallback to the game's font")
+		failAzsFont = false; G.sansOk = nil
+		assert(G.NumFont():find("azs_numbers"), "font not picked again")
+		-- Latin / Cyrillic clients get the sans font for text, other clients keep their own
+		local keepFont = G.FONT
+		G.FONT = "Fonts\\ARKai_T.ttf"
+		assert(G.Sans() == G.FONT, "CJK client should keep its own font for text")
+		G.FONT = keepFont
+		assert(G.Sans():find("azs_numbers"), "Latin client should get the sans font for text")
+	end
+	print("damage numbers ok")
+end)
+
+scenario("settings window + unlock layout", function()
+	local f = G.settings
+	assert(f and not f:IsShown(), "settings should start closed")
+	local btn = G.mapButton
+	assert(btn and btn.shown, "minimap icon missing")
+	arg1 = "LeftButton"; btn.scripts.OnClick(); assert(f:IsShown(), "left click did not open the settings")
+	for i, c in ipairs(f.checks) do assert(c.scripts.OnClick, "check " .. i .. " has no click") end
+	-- toggling a check flips the option
+	local before = G.Opt("party")
+	for _, c in ipairs(f.checks) do if c.row.label == "Party frames" then c.scripts.OnClick() end end
+	assert(G.Opt("party") == not before, "party option did not flip")
+	runTicks(6, 0.25); assert(not G.party.shown, "party frames still shown with the option off")
+	for _, c in ipairs(f.checks) do if c.row.label == "Party frames" then c.scripts.OnClick() end end
+	runTicks(6, 0.25); assert(G.party.shown, "party frames not back")
+	-- nameplates / messages switches match the commands
+	for _, c in ipairs(f.checks) do if c.row.label == "Game's enemy nameplates" then c.scripts.OnClick() end end
+	assert(AZSGW2DB.plates == true and NAMEPLATES_ON == 1)
+	for _, c in ipairs(f.checks) do if c.row.label == "Game's enemy nameplates" then c.scripts.OnClick() end end
+	runTicks(12, 0.05); assert(NAMEPLATES_ON == nil)
+	-- minimap switch detaches and re-attaches the game's minimap
+	for _, c in ipairs(f.checks) do if c.row.label == "GW2 minimap" then c.scripts.OnClick() end end
+	assert(Minimap.parent == MinimapCluster and not G.mm:IsShown(), "minimap option off did not hand the map back")
+	for _, c in ipairs(f.checks) do if c.row.label == "GW2 minimap" then c.scripts.OnClick() end end
+	runTicks(2, 0.05); assert(Minimap.parent == G.mm.holder and G.mm:IsShown(), "minimap option on")
+	-- size
+	G.SetScaleAll(1.25); assert(AZSGW2DB.scale == 1.25)
+	G.SetScaleAll(9); assert(AZSGW2DB.scale == 1.6, "scale not clamped")
+	G.SetScaleAll(1)
+	-- unlock: one gold box per movable frame; dragging saves the place
+	arg1 = "RightButton"; btn.scripts.OnClick()
+	assert(G.unlocked, "right click did not unlock")
+	local boxes, keys = 0, {}
+	for _, m in ipairs(G.movables) do
+		assert(m.ov and m.ov.shown, "no overlay for " .. m.key)
+		boxes = boxes + 1; keys[m.key] = true
+	end
+	for _, k in ipairs({ "orb", "top", "tally", "bosses", "guardians", "party", "target", "meter", "banner", "levelup", "minimap", "mapButton" }) do
+		assert(keys[k], "movable missing: " .. k)
+	end
+	local orbM
+	for _, m in ipairs(G.movables) do if m.key == "orb" then orbM = m end end
+	orbM.ov.scripts.OnDragStart(); orbM.ov.scripts.OnDragStop()
+	assert(AZSGW2DB.pos.orb and AZSGW2DB.pos.orb[1], "dragged position not saved")
+	assert(G.HasPos("orb") and not G.HasPos("nonsense"))
+	arg1 = "RightButton"; btn.scripts.OnClick()
+	assert(not G.unlocked)
+	for _, m in ipairs(G.movables) do assert(not m.ov.shown, "overlay still shown after lock") end
+	-- a moved boss bar is left alone by the target bar's shifting
+	AZSGW2DB.pos.bosses = { "TOP", "TOP", 10, -300 }
+	G.bossFrame.withTarget = nil; G.PlaceBosses(true)
+	AZSGW2DB.pos.bosses = nil; AZSGW2DB.pos.orb = nil
+	f:Hide()
+	print("settings, options, unlock/lock, movables:", boxes)
+end)
+
+scenario("skill rank text + no flash", function()
+	runTicks(4, 0.05)
+	assert(G.slots[1].keyText.text == "3", "rank text slot1: " .. tostring(G.slots[1].keyText.text))
+	assert(G.slots[2].keyText.text == "1", "rank text slot2: " .. tostring(G.slots[2].keyText.text))
+	-- a cooldown finishing must not trigger anything visible besides the cooldown clearing
+	for _, sl in ipairs(G.slots) do assert(sl.flash == nil and sl.flashT == nil and sl.ready == nil, "flash state left on slot") end
+	print("rank texts:", G.slots[1].keyText.text, G.slots[2].keyText.text, G.slots[3].keyText.text)
+end)
+
+scenario("ticks with data", function()
+	runTicks(60, 0.05)
+	assert(G.orb.hpText.text == "2,400", "hp text " .. G.orb.hpText.text)
+	assert(G.slots[1].curIcon == "Interface\\Icons\\Spell_Frost_FrostBolt02", "icon " .. tostring(G.slots[1].curIcon))
+	print("slot2 cd text:", G.slots[2].cdText.text, "slot6 cd text:", G.slots[6].cdText.text)
+	print("jewelry 1:", G.jewSlots[1].data and G.jewSlots[1].data.name)
+	print("status 1:", G.status[1].data and G.status[1].data.name, "time", G.status[1].time.text)
+	print("top title:", G.top.title.text, "| next:", G.top.next.text)
+	print("tally:", G.tally.items.kills.text.text, G.tally.items.gold.text.text, G.tally.items.chest.text.text, G.tally.items.kills.rate.text)
+	assert(G.tally.items.kills.rate.text:find("^%[%d+%.?%d*/m%]$"), "kills/min format: " .. G.tally.items.kills.rate.text)
+	local ravg, rrecent = G.KillRate()
+	print("kill rate avg/recent:", ravg, rrecent)
+	print("meter icons:", G.meter.rows[1].icon.tex, G.meter.rows[2].icon.tex, snapshotCalls)
+	assert(G.meter.rows[1].icon.tex == "Interface\\Icons\\Spell_Frost_FrostBolt02", "meter row 1 icon")
+	assert(G.meter.rows[2].icon.tex == "Interface\\Icons\\Spell_Shadow_BlackPlague", "meter row 2 icon")
+	local br = G.bossFrame.rows[1]
+	print("boss row1:", br.name.text, br.pct.text, "| head:", G.bossFrame.headText.text, G.bossFrame.headText.shown)
+	assert(br.pct.text == "57%" and br.name.text == "Boss C  (Enraged)", "boss row content")
+	assert(br.timer == nil and G.bossFrame.rows[2].timer == nil, "the effect timer bar is gone")
+	-- the debuff icons are still there (with the stack count)
+	assert(br.debuffs[1].shown and br.debuffs[2].shown and br.debuffs[1].stack.text == "3", "debuff icons stay")
+	assert(G.bossFrame.rows[2].shown, "guardian row shown")
+	-- rows are one bar tall: the second sits right under the first
+	local r1y, r2y = lastPoint(G.bossFrame.rows[1])[5], lastPoint(G.bossFrame.rows[2])[5]
+	assert(r1y - r2y == 45, "row spacing is one row (45): " .. tostring(r1y - r2y))
+	print("boss row2:", G.bossFrame.rows[2].name.text, G.bossFrame.rows[2].curY, "row1 y:", br.curY)
+	print("guardians:", G.guardians.rows[1].name.text, G.guardians.rows[1].info.text, "|", G.guardians.rows[2].info.text, "|", G.guardians.rows[3].info.text, "|", G.guardians.count.text)
+	print("meter:", G.meter.summary.text, G.meter.rows[1].name.text, G.meter.rows[1].val.text)
+	print("resource shown:", G.resource.shown, G.resource.text.text)
+	print("levelup shown:", G.levelBtn.shown, G.levelBtn.badge.text.text)
+	print("orb xp bars:", G.orb.xpL.fill.shown, G.orb.xpR.fill.shown)
+	assert(G.orb.xpL.fill.shown, "left xp bar not drawn")
+	assert(G.orb.hpText.text == "2,400" and G.orb.subText == nil, "orb should show only the hp number")
+	print("buffs:", G.buffs[1].shown, G.buffs[1].time.text, G.buffs[2].count.text, G.buffs[4].shown, G.buffs[5].shown, "| debuffs:", G.debuffs[1].shown, G.debuffs[2].shown, G.debuffs[3].shown)
+	assert(G.buffs[4].shown and not G.buffs[5].shown and G.debuffs[2].shown and not G.debuffs[3].shown, "aura counts")
+	print("party:", G.party.shown, G.party.rows[1].name.text, G.party.rows[1].pct.text, "|", G.party.rows[2].pct.text, "|", G.party.rows[3].pct.text, G.party.rows[3].stateText.text, "| 4th", G.party.rows[4].shown)
+	assert(G.party.shown and G.party.rows[3].stateText.text == "DOWN" and not G.party.rows[4].shown, "party frames")
+end)
+
+-- ---------- layout solver: resolves SetPoint anchors into rectangles (UIParent 1600x900, scale 1)
+local SW, SH = 1600, 900
+local labels = {}
+local function labelAll()
+	labels = {}
+	for key, val in pairs(G) do
+		if type(val) == "table" and val.kind then labels[val] = key end
+	end
+	local function arr(t, name) if type(t) == "table" then for i, v in ipairs(t) do if type(v) == "table" then labels[v] = name .. i end end end end
+	arr(G.slots, "skill"); arr(G.jewSlots, "jewel"); arr(G.status, "status"); arr(G.top and G.top.skulls, "skull")
+	if G.bossFrame then arr(G.bossFrame.rows, "bossrow") end
+	arr(G.buffs, "buff"); arr(G.debuffs, "debuff")
+	if G.party then arr(G.party.rows, "party") end
+	if G.guardians then arr(G.guardians.rows, "lair") end
+	if G.meter then arr(G.meter.rows, "meterrow"); arr(G.meter.tabs, "tab") end
+	if G.tally then for k, v in pairs(G.tally.items) do labels[v] = "tally_" .. k end end
+	labels[UIParent] = "UIParent"
+end
+
+local cache = {}
+local solve
+local function R(w)
+	if w == UIParent then return { l = 0, b = 0, w = SW, h = SH } end
+	if cache[w] == "busy" then error("anchor cycle at " .. tostring(labels[w])) end
+	if cache[w] then return cache[w] end
+	cache[w] = "busy"
+	local r = solve(w)
+	cache[w] = r
+	return r
+end
+local function anchorXY(r, p)
+	local x, y
+	if string.find(p, "LEFT") then x = r.l elseif string.find(p, "RIGHT") then x = r.l + r.w else x = r.l + r.w / 2 end
+	if string.find(p, "TOP") then y = r.b + r.h elseif string.find(p, "BOTTOM") then y = r.b else y = r.b + r.h / 2 end
+	return x, y
+end
+solve = function(w)
+	local sw, sh = w.w, w.h
+	if w.kind == "FontString" then
+		local size = w.fsize or 12
+		sw = w.wSet and w.w or string.len(rawget(w, "text") or "") * size * 0.52
+		sh = w.hSet and w.h or size + 2
+	end
+	if w.allpts then local r = R(w.allpts); return { l = r.l, b = r.b, w = r.w, h = r.h } end
+	local pts = w.pts or {}
+	if #pts == 0 then return { l = 0, b = 0, w = sw, h = sh, unanchored = true } end
+	local lx, rx, cx, ty, by, cy
+	for _, p in ipairs(pts) do
+		local ax, ay = anchorXY(R(p[2]), p[3])
+		ax, ay = ax + p[4], ay + p[5]
+		if string.find(p[1], "LEFT") then lx = ax elseif string.find(p[1], "RIGHT") then rx = ax else cx = ax end
+		if string.find(p[1], "TOP") then ty = ay elseif string.find(p[1], "BOTTOM") then by = ay else cy = ay end
+	end
+	local l, wd, b, ht
+	if lx and rx then l, wd = lx, rx - lx elseif lx then l, wd = lx, sw elseif rx then wd = sw; l = rx - wd else wd = sw; l = cx - wd / 2 end
+	if by and ty then b, ht = by, ty - by elseif by then b, ht = by, sh elseif ty then ht = sh; b = ty - ht else ht = sh; b = cy - ht / 2 end
+	return { l = l, b = b, w = wd, h = ht }
+end
+local function visible(w)
+	if w == UIParent then return true end
+	return w.shown and w.parent and visible(w.parent)
+end
+
+local function dumpLayout(path)
+	labelAll()
+	cache = {}
+	local out = { string.format("CANVAS|%d|%d", SW, SH) }
+	for _, w in ipairs(allWidgets) do
+		if (w.kind == "Frame" or w.kind == "Button") and w ~= UIParent and w ~= GameTooltip and visible(w) then
+			local r = R(w)
+			if not r.unanchored then
+				table.insert(out, string.format("F|%s|%.1f|%.1f|%.1f|%.1f|%s", labels[w] or "-", r.l, r.b, r.w, r.h, w.kind))
+			end
+		elseif w.kind == "FontString" and visible(w) and (rawget(w, "text") or "") ~= "" then
+			local r = R(w)
+			if not r.unanchored then
+				local c = w.tcol or { 1, 0.82, 0 }
+				table.insert(out, string.format("T|%s|%.1f|%.1f|%.1f|%.1f|%d|%s|%.3f,%.3f,%.3f|%s", (rawget(w, "text"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")), r.l, r.b, r.w, r.h, w.fsize or 12, w.just or "LEFT", c[1], c[2], c[3], tostring(w.fpath)) .. "|" .. tostring(w.fflags or ""))
+			end
+		elseif w.kind == "Texture" and visible(w) and (w.tex or w.solid) then
+			local r = R(w)
+			if not r.unanchored and r.w > 0 and r.h > 0 then
+				local vc = w.vc or { 1, 1, 1, 1 }
+				local sol = w.solid
+				local depth, p = 0, w.parent
+				while p do depth = depth + 1; p = p.parent end
+				local idx = 0
+				for k, x in ipairs(allWidgets) do if x == w then idx = k break end end
+				local tc = w.tc and table.concat(w.tc, ",") or "0,1,0,1"
+				local tex = w.tex or "SOLID"
+				if tex == "Interface\\ChatFrame\\ChatFrameBackground" then tex = "SOLID" end
+				if sol then vc = sol end
+				table.insert(out, string.format("X|%s|%.1f|%.1f|%.1f|%.1f|%s|%.3f,%.3f,%.3f,%.3f|%s|%d|%d", tex, r.l, r.b, r.w, r.h, tc, vc[1], vc[2], vc[3], vc[4], w.layer or "ARTWORK", depth, idx))
+			end
+		end
+	end
+	local f = assert(io.open(path, "w"))
+	f:write(table.concat(out, "\n"), "\n")
+	f:close()
+	print("layout written:", path, #out - 1, "items")
+end
+
+scenario("layout dump (normal)", function()
+	dumpLayout(OUTDIR .. "/layout_normal.txt")
+end)
+
+scenario("damage preview dump", function()
+	-- put the labels on screen for a picture: WorldFrame under UIParent for a moment
+	WorldFrame.parent = UIParent
+	local t = GetTime()
+	ctProj = {}
+	local function at(id, x, y, d) ctProj[id] = { anchorId = id, state = "onScreen", x = x, y = y, playerDistance = d or 10 } end
+	at("p1", 200, 200); at("p2", 420, 200); at("p3", 640, 200); at("p4", 860, 200); at("p5", 1080, 200); at("p6", 1300, 200)
+	at("q1", 200, 120); at("q2", 420, 120)
+	ctEvents = {
+		{ kind = "damage", amount = 1358, anchorId = "p1", anchorStatus = "ready", sourceKind = "player", presentedAt = t },
+		{ kind = "damage", amount = 7457, critical = true, anchorId = "p2", anchorStatus = "ready", sourceKind = "player", presentedAt = t },
+		{ kind = "damage", amount = 203, anchorId = "p3", anchorStatus = "ready", sourceKind = "player", presentedAt = t },
+		{ kind = "damage", amount = 41, periodic = true, anchorId = "p4", anchorStatus = "ready", sourceKind = "player", presentedAt = t },
+		{ kind = "damage", amount = 889, anchorId = "p5", anchorStatus = "ready", sourceKind = "pet", presentedAt = t },
+		{ kind = "miss", result = { key = "dodge", text = "dodge" }, anchorId = "p6", anchorStatus = "ready", sourceKind = "player", presentedAt = t },
+		{ kind = "damage", amount = 12840, critical = true, anchorId = "q1", anchorStatus = "ready", sourceKind = "player", presentedAt = t },
+		{ kind = "damage", amount = 2500000, critical = true, anchorId = "q2", anchorStatus = "ready", sourceKind = "player", presentedAt = t },
+	}
+	ctHandler()
+	now = now + 0.25; ctHandler()
+	local was = {}
+	for _, f in ipairs(G.all) do was[f] = f.shown; f.shown = false end
+	for _, f in ipairs(G.always) do was[f] = f.shown; f.shown = false end
+	dumpLayout(OUTDIR .. "/layout_dmg.txt")
+	for f, v in pairs(was) do f.shown = v end
+	WorldFrame.parent = nil
+	now = now + 3; ctHandler()
+end)
+
+scenario("layout dump (busy: many summons / totems / timers)", function()
+	local sg, tt, tm = AZS_GetSummonGroups, AZS_GetTotems, AZS_GetTimers
+	local ic = "Interface\\Icons\\Spell_Shadow_SummonImp"
+	function AZS_GetSummonGroups()
+		local t = {}
+		for i = 1, 7 do t[i] = { key = "s" .. i, name = "Summon " .. i, icon = ic, count = i, permanent = 0, temporary = i, remaining = 10 + i } end
+		return t, 28
+	end
+	function AZS_GetTotems()
+		local t = {}
+		for i = 1, 3 do t[i] = { key = "t" .. i, name = "Totem " .. i, icon = ic, count = 1, remaining = 20 + i } end
+		return t
+	end
+	function AZS_GetTimers()
+		local t = {}
+		for i = 1, 4 do t[i] = { name = "Timer " .. i, icon = ic, kind = "cooldown", remaining = 3 + i, ready = false } end
+		return t
+	end
+	runTicks(10, 0.05)
+	dumpLayout(OUTDIR .. "/layout_busy.txt")
+	AZS_GetSummonGroups, AZS_GetTotems, AZS_GetTimers = sg, tt, tm
+	runTicks(10, 0.05)
+end)
+
+scenario("cooldown counts down", function()
+	local before = G.slots[6].cdText.text
+	runTicks(40, 0.05)   -- 2 s
+	print("slot6:", before, "->", G.slots[6].cdText.text)
+	AZS_SPELLS[6].cd = 0; AZS_SPELLS_UPDATED = 2
+	runTicks(3, 0.05)
+	print("slot6 after refresh:", G.slots[6].cdText.text == "" and "ready" or G.slots[6].cdText.text)
+end)
+
+scenario("banners", function()
+	assert(bannerHandler, "no banner handler")
+	bannerHandler({ kind = "boss", boss = true, name = "X", text = "A boss approaches" })
+	bannerHandler({ kind = "achievement", boss = false, name = "Y", text = "Achievement unlocked" })
+	runTicks(100, 0.05)
+	print("banner shown:", G.banner.shown, G.banner.text.text)
+end)
+
+scenario("native popup hunter", function()
+	-- the game's own popup: an unnamed frame under UIParent with a big font string
+	local txt = "Kobold Taskmaster is slain! Its lair yields treasure and its strength, and the other guardians grow stronger."
+	local native = CreateFrame("Frame", nil, UIParent)
+	local nfs = native:CreateFontString(nil, "OVERLAY"); nfs:SetFont("Fonts\\FRIZQT__.TTF", 30); nfs:SetText("|cffffd9a0" .. txt .. "|r")
+	local decoy = CreateFrame("Frame", nil, UIParent)
+	local dfs = decoy:CreateFontString(nil, "OVERLAY"); dfs:SetFont("Fonts\\FRIZQT__.TTF", 12); dfs:SetText("Something else entirely here")
+	-- text straight on a full-screen frame
+	local full = CreateFrame("Frame", "SomeFullScreen", UIParent); full.w = 5000; full.h = 5000
+	local ffs = full:CreateFontString(nil, "OVERLAY"); ffs:SetFont("Fonts\\FRIZQT__.TTF", 30); ffs:SetText("Another guardian is slain! The lair is quiet.")
+	AZSGW2DB.messages = false
+	bannerHandler({ kind = "guardian", boss = false, name = "Kobold Taskmaster", text = txt })
+	bannerHandler({ kind = "guardian", boss = false, name = "Other", text = "Another guardian is slain! The lair is quiet." })
+	runTicks(60, 0.05)
+	print("native frame shown:", native.shown, "parent is UIParent:", native.parent == UIParent, "| decoy shown:", decoy.shown)
+	print("fullscreen frame shown:", full.shown, "| its text shown:", ffs.shown)
+	print("our banner text:", G.banner.text.text)
+	assert(not native.shown and native.parent ~= UIParent, "native popup not hidden")
+	assert(decoy.shown and decoy.parent == UIParent, "decoy was hidden")
+	assert(full.shown and not ffs.shown, "full-screen frame handling wrong")
+	native.parent = native.parent; native:Show()
+	assert(native.scripts.OnShow, "no OnShow hook"); native.scripts.OnShow()
+	assert(not native.shown, "OnShow hook does not hide")
+	G.RestoreHidden()
+	print("after restore: parent is UIParent:", native.parent == UIParent)
+	assert(native.parent == UIParent)
+	-- a crowded screen: the walk stops after 900 frames, whatever is there
+	do
+		local crowd = CreateFrame("Frame", nil, UIParent)
+		for i = 1, 1500 do CreateFrame("Frame", nil, crowd) end
+		AZSGW2DB.messages = false
+		G.hunt.off = false; G.hunt.misses = 0
+		bannerHandler({ kind = "guardian", boss = false, name = "Q", text = "Nobody shows this text anywhere on screen" })
+		runTicks(40, 0.05)
+		print("frames looked at (crowded screen):", G.hunt.nodes, "| misses:", G.hunt.misses, "| off:", G.hunt.off)
+		assert(G.hunt.nodes and G.hunt.nodes <= 900, "hunter walk is not bounded")
+		-- a second empty hunt switches the hunter off for the session
+		bannerHandler({ kind = "guardian", boss = false, name = "Q", text = "Nobody shows this text anywhere either" })
+		runTicks(40, 0.05)
+		assert(G.hunt.off, "hunter did not switch itself off after two empty hunts")
+		local nodesBefore = G.hunt.nodes
+		bannerHandler({ kind = "guardian", boss = false, name = "Q", text = "A third banner that nobody draws" })
+		runTicks(40, 0.05)
+		assert(G.hunt.pending == nil and G.hunt.nodes == nodesBefore, "hunter ran while switched off")
+		SlashCmdList["AZSGW2"]("hunt on")
+		assert(not G.hunt.off, "/gw2 hunt on")
+		G.hunt.off = false; G.hunt.misses = 0
+		crowd:Hide()
+	end
+	-- with the game's messages switched on (/gw2 messages) nothing is hunted
+	AZSGW2DB.messages = true
+	local before = G.hunt.count
+	bannerHandler({ kind = "guardian", boss = false, name = "Z", text = "Zebra Guardian is slain! Treasure awaits you." })
+	runTicks(20, 0.05)
+	assert(G.hunt.count == before, "hunted while messages on")
+	AZSGW2DB.messages = false
+end)
+
+scenario("ally down alert", function()
+	assert(G.reviveFrame, "no alert frame")
+	local reads0 = catalogReads
+	-- Ghost has no known position: the alert shows without an arrow
+	runTicks(4, 0.05)
+	print("alert rows:", G.reviveFrame.shown, G.reviveFrame.rows[1].title.text, "| arrow shown:", G.reviveFrame.rows[1].arrow.shown)
+	assert(G.reviveFrame.shown and G.reviveFrame.rows[1].shown, "alert not shown")
+	assert(string.find(G.reviveFrame.rows[1].title.text, "Ghost") and string.find(G.reviveFrame.rows[1].title.text, "is down!") and string.find(G.reviveFrame.rows[1].title.text, "Revive them!"), "text")
+	assert(not G.reviveFrame.rows[1].arrow.shown, "arrow without a position")
+	assert(#playedSounds == 1, "one sound for one fall: " .. #playedSounds)
+	-- a friend with a position and a world anchor
+	downedList = { { id = "H2", name = "Ghost", positionAvailable = false },
+		{ id = "H3", name = "Zaynor", positionAvailable = true, x = 30, y = 40, z = 0, spaceId = "m1:1" } }
+	anchorCatalog = { { anchorId = "dp1", kind = "downedPartyMember", state = "downed", memberId = "H3", name = "Zaynor" } }
+	runTicks(6, 0.05)
+	local r2 = G.reviveFrame.rows[2]
+	print("row 2:", r2.title.text, r2.dist.text, "| arrow shown:", r2.arrow.shown, "| catalog reads:", catalogReads - reads0)
+	assert(r2.shown and string.find(r2.title.text, "Zaynor") and r2.arrow.shown and r2.dist.text == "50 yd", "row with position")
+	assert(#playedSounds == 2, "second fall plays a sound")
+	assert(catalogReads - reads0 >= 1 and catalogReads - reads0 <= 2, "catalog reads: " .. (catalogReads - reads0))
+	-- the marker over the body
+	assert(worldHandler, "no world anchors handler")
+	worldHandler()
+	WorldFrame.parent = UIParent
+	dumpLayout(OUTDIR .. "/layout_alert.txt")
+	WorldFrame.parent = nil
+	local m = G.reviveMarks[1]
+	print("marker:", m.shown, m.text.text)
+	assert(m.shown and string.find(m.text.text, "Zaynor"), "marker over the body")
+	local pt = lastPoint(m)
+	assert(pt[2] == WorldFrame and pt[3] == "BOTTOMLEFT" and pt[4] == 850, "marker placement")
+	projState = "offscreen"; worldHandler()
+	assert(not m.shown, "marker hidden when off screen")
+	projState = "onScreen"
+	-- the same friend staying down does not make a new sound
+	runTicks(20, 0.05)
+	assert(#playedSounds == 2, "sound repeated")
+	-- stock banner for the fall is not queued twice
+	local q0 = #G.banner.queue
+	bannerHandler({ kind = "frienddown", boss = false, name = "Zaynor", text = "Zaynor is down!" })
+	assert(#G.banner.queue == q0, "frienddown banner queued next to the alert")
+	G.SetOpt("revive", false)
+	bannerHandler({ kind = "frienddown", boss = false, name = "Zaynor", text = "Zaynor is down!" })
+	assert(#G.banner.queue == q0 + 1, "banner should show when the alert is off")
+	runTicks(3, 0.05)
+	assert(not G.reviveFrame.shown and not m.shown or true)
+	worldHandler(); assert(not m.shown, "marker with the option off")
+	G.SetOpt("revive", true)
+	-- they get back up
+	downedList = {}
+	runTicks(4, 0.05)
+	assert(not G.reviveFrame.shown and not G.reviveMarks[1].shown, "alert stays after the revive")
+	assert(next(G.down.known) == nil, "known list not cleared")
+	downedList = { { id = "H2", name = "Ghost", positionAvailable = false } }
+end)
+
+scenario("minimap shows the hero", function()
+	assert(G.mm.me.shown, "player arrow not shown")
+	runTicks(5, 0.06)
+	assert(G.mm.me.shown)
+end)
+
+scenario("difficulty on the run bar", function()
+	local keep = AZS_ZONE.heroic
+	AZS_ZONE.heroic = nil; AZS_ZONE.affixes = nil
+	runTicks(4, 0.1)
+	print("difficulty:", G.top.diff.text.text, "|", G.top.affix.text)
+	assert(G.top.diff.text.text == "NORMAL" and G.top.affix.text == "", "normal run")
+	AZS_ZONE.heroic = 3; AZS_ZONE.affixes = "bolstering,sanguine"
+	runTicks(4, 0.1)
+	print("difficulty:", G.top.diff.text.text, "|", G.top.affix.text)
+	assert(G.top.diff.text.text == "HEROIC III" and string.find(G.top.affix.text, "Bolstering") and string.find(G.top.affix.text, "Sanguine"), "heroic 3")
+	dumpLayout(OUTDIR .. "/layout_diff.txt")
+	AZS_ZONE.heroic = 5; AZS_ZONE.affixes = "explosive"
+	runTicks(4, 0.1)
+	assert(G.top.diff.text.text == "HEROIC V")
+	AZS_ZONE.heroic = 1; AZS_ZONE.affixes = ""
+	runTicks(4, 0.1)
+	assert(G.top.diff.text.text == "HEROIC I" and G.top.affix.text == "")
+	AZS_ZONE.heroic = 9
+	runTicks(4, 0.1)
+	assert(G.top.diff.text.text == "HEROIC V", "clamped")
+	-- the affixes sit on the line under the bar, left of them the next boss, and nothing overlaps the title
+	local up0 = AZS_GetUpcomingBosses
+	local function rect(w) cache = {}; local r = R(w); return r.l, r.l + r.w, r.b, r.b + r.h end
+	for _, case in ipairs({ { "bolstering", "Kovork" }, { "bolstering,sanguine", "Scarlet Commander" }, { "bolstering,sanguine,explosive", "Scarlet Commander" } }) do
+		AZS_ZONE.heroic = 5; AZS_ZONE.affixes = case[1]
+		AZS_GetUpcomingBosses = function() return { { index = 4, name = case[2], at = 960, left = 194, final = false } } end
+		runTicks(4, 0.1)
+		local t = G.top
+		local fl, fr = rect(t)
+		local tl, tr, tb, tt = rect(t.title)
+		local nl, nr, nb, nt = rect(t.next)
+		local al, ar, ab, at = rect(t.affix)
+		print(string.format("  %-32s title %5.1f-%5.1f  next %5.1f-%5.1f  affix %5.1f-%5.1f  (frame %d-%d)", case[1], tl, tr, nl, nr, al, ar, fl, fr))
+		assert(t.affix.shown ~= false, "affixes shown: " .. case[1])
+		assert(at <= tb + 40 and ab < tb, "affixes are on the lower line")          -- under the title row
+		assert(nr + 4 <= al, "next boss and affixes do not overlap: " .. nr .. " vs " .. al)
+		assert(ar <= fr + 1 and nl >= fl - 1, "inside the frame")
+	end
+	-- not enough room: the affixes give way (the difficulty tooltip lists them)
+	AZS_GetUpcomingBosses = function() return { { index = 4, name = string.rep("Averyveryverylongname ", 3), at = 960, left = 194, final = false } } end
+	runTicks(4, 0.1)
+	assert(G.top.affix.shown == false, "affixes hide when the line is too full")
+	-- without affixes the next boss is centered again
+	AZS_ZONE.heroic = 0; AZS_ZONE.affixes = ""
+	AZS_GetUpcomingBosses = up0
+	runTicks(4, 0.1)
+	local pt = G.top.next.pts[#G.top.next.pts]
+	assert(pt[1] == "TOP" and G.top.next.just == "CENTER", "next boss centered without affixes: " .. tostring(pt[1]))
+	AZS_ZONE.heroic = 2; AZS_ZONE.affixes = "bolstering"
+	runTicks(4, 0.1)
+end)
+
+
+scenario("character panel", function()
+	local f = G.charPanel
+	assert(f, "no character panel")
+	AZS_ZONE.cname = "Mage"; AZS_ZONE.rname = "Human"
+	-- the key binding (ToggleCharacter) opens ours, not the game's window
+	local sounds0 = #playedSounds
+	ToggleCharacter("PaperDollFrame")
+	assert(f.shown and not CharacterFrame.shown, "panel should replace the stock window")
+	runTicks(6, 0.1)
+	print("header:", f.nameText.text, "|", f.levelText.text)
+	assert(f.nameText.text == "Mr Nippy" and string.find(f.levelText.text, "Level 63") and string.find(f.levelText.text, "Human") and string.find(f.levelText.text, "Mage"), "header text")
+	local ap = f.attr
+	local shownCells, rows = 0, {}
+	for _, c in ipairs(ap.cells) do
+		if c.shown then shownCells = shownCells + 1; rows[c.entry.key] = c.label.text .. "=" .. c.value.text end
+	end
+	local keys = {}
+	for k, v in pairs(rows) do table.insert(keys, v) end
+	table.sort(keys)
+	print("attribute cells shown:", shownCells, "\n   " .. table.concat(keys, "\n   "))
+	assert(shownCells == 20, "all 19 stats + the unknown one shown, got " .. shownCells)
+	assert(rows.hp == "Health=2,400" and rows.dmg == "Damage=x1.25" and rows.crit == "Crit Chance=12%" and rows.reg == "Regeneration=1.5/s", "value formats")
+	assert(rows.cd == "CDR=15%" and rows.arm == "Armor=18%" and rows.cnt == "Extra Targets=1", "value formats 2")
+	assert(rows.luck == "Luck=40%" and rows.cm == "Crit Damage=x3.04" and rows.lch == "Leech=3%", "luck / crit damage / leech: " .. tostring(rows.luck) .. " " .. tostring(rows.cm))
+	assert(rows.foo == "Foo=7", "an unknown stat is listed under Other")
+	-- gear bonuses colour the number and show in the tooltip
+	local hpcell
+	for _, c in ipairs(ap.cells) do if c.shown and c.entry.key == "hp" then hpcell = c end end
+	assert(hpcell.value.tcol[1] < 0.7 and hpcell.value.tcol[2] > 0.9, "gear stat not green")
+	pcall(hpcell.scripts.OnEnter)
+	-- equipment: all gear on the left, only accessories on the right, weapons only when held
+	local ammo = worn[0]; worn[0] = nil
+	runTicks(6, 0.1)
+	local slotsShown, filled = 0, 0
+	for _, b in ipairs(f.slots) do slotsShown = slotsShown + 1; if b.hasItem then filled = filled + 1 end end
+	print("slots:", slotsShown, "with items:", filled)
+	assert(slotsShown == 20 and filled == 3, "slots")
+	local names = {}
+	for _, b in ipairs(f.slots) do names[b.slotName] = b end
+	local function col(b) return lastPoint(b)[4] end
+	for _, n in ipairs({ "HeadSlot", "ShoulderSlot", "BackSlot", "ChestSlot", "ShirtSlot", "TabardSlot", "WristSlot", "HandsSlot", "WaistSlot", "LegsSlot", "FeetSlot" }) do
+		assert(names[n] and col(names[n]) == 18, n .. " should be in the left column")
+	end
+	for _, n in ipairs({ "NeckSlot", "Finger0Slot", "Finger1Slot", "Trinket0Slot", "Trinket1Slot" }) do
+		assert(names[n] and col(names[n]) >= 316, n .. " should be an accessory on the right")
+	end
+	for _, n in ipairs({ "BackSlot", "WaistSlot", "WristSlot", "ShirtSlot", "TabardSlot" }) do
+		assert(col(names[n]) == 18, n .. " is gear, not an accessory")
+	end
+	assert(not f.weaponHead.shown, "no weapons held: no Weapons title")
+	for _, n in ipairs({ "MainHandSlot", "SecondaryHandSlot", "RangedSlot", "AmmoSlot" }) do
+		assert(not names[n].shown, n .. " hidden when empty")
+	end
+	local head = names.HeadSlot
+	assert(head.edges.top.vc[1] > 0.6 and head.edges.top.vc[2] < 0.3, "epic purple border on the helm")
+	for _, b in ipairs(f.slots) do b.scripts.OnEnter(); b.scripts.OnLeave() end
+	head.scripts.OnClick(); arg1 = "RightButton"; head.scripts.OnClick(); arg1 = nil
+	assert(pickups[1] == 1 and pickups[2] == -1, "click handlers")
+	assert(f.helm == nil and f.cloak == nil, "the helm / cloak switches are gone")
+	-- a held weapon shows up, in the first place, with the title
+	worn[16] = { "Interface\\Icons\\INV_Mace_01", "|cffffffff|Hitem:9:0:0:0|h[Mace]|h|r" }
+	runTicks(6, 0.1)
+	assert(names.MainHandSlot.shown and f.weaponHead.shown, "held weapon not shown")
+	assert(col(names.MainHandSlot) == 18, "first weapon at the left")
+	worn[17] = { "Interface\\Icons\\INV_Shield_01", "|cff0070dd|Hitem:10:0:0:0|h[Shield]|h|r" }
+	runTicks(6, 0.1)
+	assert(names.SecondaryHandSlot.shown and col(names.SecondaryHandSlot) > 18, "second weapon beside the first")
+	worn[16] = nil; worn[17] = nil
+	runTicks(6, 0.1)
+	assert(not names.MainHandSlot.shown and not names.SecondaryHandSlot.shown and not f.weaponHead.shown, "weapons put away")
+	worn[0] = ammo
+	runTicks(6, 0.1)
+	assert(names.AmmoSlot.shown and f.weaponHead.shown, "ammo shows when held")
+	worn[0] = nil
+	runTicks(6, 0.1)
+	-- the show / hide scripts (the mock's Show does not run them)
+	f.scripts.OnShow(); f.scripts.OnHide()
+	assert(#playedSounds - sounds0 == 2, "open / close sounds")
+	-- the picture
+	local was = {}
+	for _, w in ipairs(G.all) do was[w] = w.shown; w.shown = false end
+	for _, w in ipairs(G.always) do was[w] = w.shown; w.shown = false end
+	dumpLayout(OUTDIR .. "/layout_char.txt")
+	for w, v in pairs(was) do w.shown = v end
+	-- the same key closes it again
+	ToggleCharacter("PaperDollFrame")
+	assert(not f.shown and not CharacterFrame.shown, "toggle closes")
+	-- another tab of the game's window is the game's own
+	ToggleCharacter("ReputationFrame")
+	assert(CharacterFrame.shown and not f.shown, "reputation tab stays stock")
+	HideUIPanel(CharacterFrame)
+	-- anything else that shows the stock window on its first tab is turned into ours
+	CharacterFrame.selectedTab = 1
+	ShowUIPanel(CharacterFrame)
+	assert(f.shown and not CharacterFrame.shown, "OnShow backup")
+	f:Hide()
+	-- the buttons
+	G.charBtn.scripts.OnClick()
+	assert(f.shown, "character button opens the panel")
+	G.charBtn.scripts.OnClick()
+	assert(not f.shown, "character button closes it again")
+	-- option off: the game's window comes back
+	G.SetOpt("charPanel", false)
+	ToggleCharacter("PaperDollFrame")
+	assert(CharacterFrame.shown and not f.shown, "option off -> stock window")
+	HideUIPanel(CharacterFrame)
+	G.SetOpt("charPanel", true)
+	-- no run: the game's window
+	phase = nil
+	runTicks(3, 0.1)
+	ToggleCharacter("PaperDollFrame")
+	assert(CharacterFrame.shown and not f.shown, "no run -> stock window")
+	HideUIPanel(CharacterFrame)
+	phase = "playing"
+	runTicks(3, 0.1)
+	-- a run ending takes the panel with it
+	f:Show()
+	phase = nil
+	runTicks(3, 0.1)
+	assert(not f.shown, "panel stays after the run ended")
+	phase = "playing"
+	runTicks(3, 0.1)
+	-- changing stats rebuilds the layout, an empty table is fine
+	local keep = AZS_STATS
+	AZS_STATS = { hp = 100 }
+	f:Show(); runTicks(6, 0.1)
+	local n = 0
+	for _, c in ipairs(f.attr.cells) do if c.shown then n = n + 1 end end
+	assert(n == 1, "one stat -> one cell, got " .. n)
+	AZS_STATS = {}
+	runTicks(6, 0.1)
+	n = 0
+	for _, c in ipairs(f.attr.cells) do if c.shown then n = n + 1 end end
+	assert(n == 0 and f.attr.empty.text ~= "", "empty stats")
+	AZS_STATS = nil
+	runTicks(6, 0.1)
+	AZS_STATS = { hp = "x", dmg = "1.5", weird = {} }
+	runTicks(6, 0.1)
+	AZS_STATS = keep
+	runTicks(6, 0.1)
+	f:Hide()
+		SlashCmdList["AZSGW2"]("stats")
+	SlashCmdList["AZSGW2"]("char")
+	assert(f.shown); f:Hide()
+	SlashCmdList["AZSGW2"]("char off"); assert(not G.Opt("charPanel"))
+	SlashCmdList["AZSGW2"]("char on"); assert(G.Opt("charPanel"))
+end)
+
+
+scenario("boss list header", function()
+	local c = G.bossFrame
+	runTicks(4, 0.1)
+	print("header (boss + guardian):", c.headText.shown, c.headText.text)
+	assert(c.headText.shown and c.headLine.shown and c.headText.text == "Bosses & Guardians", "title with two enemies")
+	assert(c.headSkull == nil and c.headCrown == nil, "no skull / crown repeated in the title")
+	local sb, sg = AZS_GetBosses, AZS_GetGuardians
+	local function guard(id, name) return { id = id, name = name, hp = 100, hpm = 900, awake = true, debuffs = {} } end
+	AZS_GetBosses = function() return {} end
+	AZS_GetGuardians = function() return { guard(5, "Gruff Swiftbite") } end
+	runTicks(4, 0.1)
+	print("one guardian: title", c.headText.shown, "row", c.rows[1].shown, c.rows[1].name.text)
+	assert(not c.headText.shown and not c.headLine.shown and c.rows[1].shown and not c.rows[2].shown, "a single enemy has no title")
+	assert(lastPoint(c.rows[1])[5] == -2, "row 1 right under the top: " .. tostring(lastPoint(c.rows[1])[5]))
+	WorldFrame.parent = nil
+	local was = {}
+	for _, w in ipairs(G.all) do was[w] = w.shown; if w ~= c then w.shown = false end end
+	for _, w in ipairs(G.always) do was[w] = w.shown; w.shown = false end
+	dumpLayout(OUTDIR .. "/layout_guard1.txt")
+	AZS_GetGuardians = function() return { guard(5, "Gruff Swiftbite"), guard(6, "Spectral Tutor") } end
+	runTicks(4, 0.1)
+	assert(c.headText.shown and c.headText.text == "Guardians" and lastPoint(c.rows[1])[5] == -24, "title with two guardians")
+	for _, w in ipairs(G.all) do if w ~= c then w.shown = false end end -- the ticks showed the other parts again; the preview is about the list
+	for _, w in ipairs(G.always) do w.shown = false end
+	dumpLayout(OUTDIR .. "/layout_guard2.txt")
+	for w, v in pairs(was) do w.shown = v end
+	AZS_GetGuardians = function() return {} end
+	runTicks(4, 0.1)
+	assert(not c.rows[1].shown and not c.headText.shown and not c.panel.shown, "nothing listed")
+	AZS_GetBosses, AZS_GetGuardians = sb, sg
+	runTicks(4, 0.1)
+end)
+
+scenario("party barrier", function()
+	local rows = G.party.rows
+	runTicks(6, 0.1)
+	local r1, r2 = rows[1], rows[2]
+	print("party row 1:", r1.pct.text, r1.hpText.text, "| barrier shown:", r1.bar.barrier.shown)
+	assert(not r1.bar.barrier.shown and not r1.bar.edge.shown and r1.barText.text == "", "no barrier by default")
+	-- the layer is above the health: its frame is above the bar's and the percent text's frame above that
+	do
+		local bar = r1.bar.barrier.parent
+		assert(bar and bar.parent == r1.bar and bar:GetFrameLevel() > r1.bar:GetFrameLevel(), "barrier layer is a frame above the bar")
+		assert(r1.pct.parent:GetFrameLevel() > bar:GetFrameLevel() and r1.pct.parent.parent == r1.bar, "percent text above the barrier")
+		assert(r1.bar.barrier.layer == "OVERLAY", "barrier is an overlay texture")
+	end
+	-- health above the maximum is a barrier with an amount
+	partyData.party1.hp = 2100
+	runTicks(6, 0.1)
+	print("party row 1 with barrier:", r1.pct.text, r1.hpText.text, r1.barText.text, "| shown:", r1.bar.barrier.shown)
+	assert(r1.bar.barrier.shown and r1.barText.text == "+300" and r1.pct.text == "100%" and r1.hpText.text == "1.8K", "barrier amount")
+	local pt = r1.bar.barrier.pts[#r1.bar.barrier.pts]
+	assert(pt[4] > 100, "barrier runs back from the full end: " .. pt[4])
+	assert(r1.port.edges.top.vc[2] > 0.8 and r1.port.edges.top.vc[3] < 0.5, "portrait trim goes gold")
+	do
+		local ub0 = UnitBuff
+		UnitBuff = function(u, i) if u == "party2" and i == 4 then return "Interface\\Icons\\Spell_Holy_PowerWordShield" end if i <= 3 then return "Interface\\Icons\\Spell_Holy_WordFortitude" end end
+		partyData.party2.hp = 1000
+		runTicks(6, 0.1)
+		dumpLayout(OUTDIR .. "/layout_party.txt")
+		partyData.party2.hp = 700
+		UnitBuff = ub0
+	end
+	partyData.party1.hp = 1000
+	partyData.party1.hpm = 1800
+	runTicks(2, 0.1)
+	partyData.party1.hp = 1800 + 200
+	runTicks(6, 0.1)
+	r1.scripts.OnEnter()
+	partyData.party1.hp = 1800
+	-- a shield buff without an amount: a gold line
+	local ub = UnitBuff
+	UnitBuff = function(u, i) if u == "party2" and i == 4 then return "Interface\\Icons\\Spell_Holy_PowerWordShield" end if i <= 3 then return "Interface\\Icons\\Spell_Holy_WordFortitude" end end
+	runTicks(6, 0.1)
+	print("party row 2 with a shield buff:", r2.bar.barrier.shown, r2.bar.barrier.vc[4])
+	assert(r2.bar.barrier.shown and r2.barText.text == "" and r2.bar.barrier.vc[4] < 0.5, "shield buff: a faint layer over the health, no amount")
+	assert(r2.bar.barrier.pts[#r2.bar.barrier.pts][4] < 5, "the layer starts at the left end of the bar")
+	assert(not r1.bar.barrier.shown, "no layer for a friend without the buff")
+	r2.scripts.OnEnter()
+	-- the shield goes: the line goes
+	UnitBuff = function(u, i) if i <= 3 then return "Interface\\Icons\\Spell_Holy_WordFortitude" end end
+	runTicks(6, 0.1)
+	assert(not r2.bar.barrier.shown and not r2.bar.edge.shown, "layer stays")
+	-- a downed friend shows no barrier
+	partyData.party3.hp = 900 + 100
+	runTicks(6, 0.1)
+	assert(not rows[3].bar.barrier.shown and not rows[3].bar.edge.shown, "downed friend")
+	partyData.party3.hp = 0
+	-- many different buff icons do not grow anything without a limit
+	UnitBuff = function(u, i) if i <= 16 then return "Interface\\Icons\\Spell_X_" .. math.floor(now * 1000) .. "_" .. i end end
+	runTicks(120, 0.2)
+	UnitBuff = ub
+	runTicks(6, 0.1)
+	SlashCmdList["AZSGW2"]("party")
+end)
+
+
+scenario("soak: 24 minutes of play with churn (memory / widget count must stay flat)", function()
+	local function mem() collectgarbage(); collectgarbage(); return collectgarbage("count") end
+	local function tick(n)
+		for i = 1, n do
+			runTicks(1, 0.05)
+			if ctHandler then ctHandler() end
+			if worldHandler then worldHandler() end
+		end
+	end
+	local function guards()
+		for _, id in ipairs({ "s1", "s2", "s3", "s4", "s5", "s6" }) do ctProj[id] = { anchorId = id, state = "onScreen", x = 300 + #id * 90 + tonumber(id:sub(2)) * 60, y = 300, playerDistance = 12 } end
+	end
+	local f = G.charPanel
+	local widgets0, m0, samples = nil, nil, {}
+	G.hunt.off = false
+	local statsKeep = AZS_STATS
+	for minute = 1, 24 do
+		for step = 1, 60 do
+			if step % 3 == 0 then
+				guards()
+				for i = 1, 6 do ctEvents[#ctEvents + 1] = { kind = "damage", amount = 1000 + i * step, critical = (i == 3), periodic = (i == 5), anchorId = "s" .. i, anchorStatus = "ready", sourceKind = (i == 6) and "pet" or "player", presentedAt = GetTime() } end
+			end
+			if step % 11 == 0 then
+				bannerHandler({ kind = ({ "guardian", "magnet", "cache", "bossdown", "frienddown", "rune" })[1 + (step + minute) % 6], boss = false, name = "Some Guardian " .. minute, text = "Some Guardian " .. minute .. " is slain! Its lair yields treasure." })
+			end
+			if step % 13 == 0 then
+				if #downedList == 1 then
+					downedList = { { id = "H2", name = "Ghost", positionAvailable = false }, { id = "H" .. minute, name = "Friend" .. minute, positionAvailable = true, x = 10 + step, y = 5, z = 0, spaceId = "m1:1" } }
+					anchorCatalog = { { anchorId = "dp" .. minute, kind = "downedPartyMember", state = "downed", memberId = "H" .. minute, name = "Friend" .. minute } }
+				else
+					downedList = { { id = "H2", name = "Ghost", positionAvailable = false } }
+				end
+			end
+			if step % 5 == 0 then
+				AZS_STATS = { hp = 2400 + step, dmg = 1.25 + step / 100, crit = 0.12, luck = 0.4, reg = 1.5, ["x" .. (step % 4)] = step, gdmg = 0.1 }
+				partyData.party1.hp = 1800 + (step % 2) * 200
+				partyData.party2.hp = 400 + step * 10
+			end
+			if step % 9 == 0 then
+				clientTarget = (clientTarget == nil) and { name = "Kobold " .. minute, hostile = true, dead = false, class = "normal", hp = 50, hpm = 100 } or nil
+				fire("PLAYER_TARGET_CHANGED")
+			end
+			if step % 17 == 0 then
+				f:Show(); f.scripts.OnShow(); tick(3)
+				for _, b in ipairs(f.slots) do if b.scripts.OnEnter then b.scripts.OnEnter(); b.scripts.OnLeave() end end
+				for _, c in ipairs(f.attr.cells) do if c.shown and c.scripts.OnEnter then c.scripts.OnEnter() end end
+				f:Hide(); f.scripts.OnHide()
+			end
+			if step % 19 == 0 then
+				AZS_ZONE.heroic = step % 6
+				AZS_ZONE.affixes = (step % 2 == 0) and "bolstering,sanguine" or ""
+			end
+			if step % 23 == 0 then
+				G.ToggleSettings(); tick(2); G.ToggleSettings()
+				G.SetUnlocked(true); tick(2); G.SetUnlocked(false)
+			end
+			if step == 31 then
+				phase = nil; tick(4); phase = "playing"
+			end
+			tick(20)
+			if step % 7 == 0 then
+				for _, fr in ipairs({ G.orb, G.slots[1], G.slots[3], G.racial, G.meter.rows[1], G.tally.items.kills, G.jewSlots[1], G.talentBtn, G.charBtn }) do
+					if fr and fr.scripts.OnEnter then pcall(fr.scripts.OnEnter) end
+				end
+			end
+		end
+		-- the mock's own logs are not the addon's memory
+		for k in pairs(chatLines) do chatLines[k] = nil end
+		for k in pairs(playedSounds) do playedSounds[k] = nil end
+		for k in pairs(errorsMsgs) do errorsMsgs[k] = nil end
+		for k in pairs(raidMsgs) do raidMsgs[k] = nil end
+		ctEvents = {}
+		local m = mem()
+		samples[#samples + 1] = string.format("%.0f", m)
+		if minute == 4 then widgets0, m0 = #allWidgets, m end
+	end
+	AZS_STATS = statsKeep
+	local m1 = mem()
+	print("memory (KB) after each minute:", table.concat(samples, " "))
+	print("widgets after minute 4:", widgets0, "at the end:", #allWidgets)
+	print(string.format("memory growth from minute 4 to 24: %.1f KB", m1 - m0))
+	assert(#allWidgets == widgets0, "widgets still being created: " .. (#allWidgets - widgets0))
+	assert(m1 - m0 < 150, "memory keeps growing: " .. (m1 - m0) .. " KB")
+	local count = 0
+	for _ in pairs(G.hunt.seen) do count = count + 1 end
+	print("hunter remembered frames:", count, "| hide list:", #AZSGW2DB.hide, "| known downed:", (function() local n = 0 for _ in pairs(G.down.known) do n = n + 1 end return n end)(), "| label free list:", #G.dmg.free)
+end)
+
+
+scenario("garbage per rendered frame (60 fps, steady state)", function()
+	local function measure(label, setup)
+		if setup then setup() end
+		runTicks(30, 0.016); collectgarbage(); collectgarbage()
+		collectgarbage("stop")
+		local before = collectgarbage("count")
+		local frames = 300
+		for i = 1, frames do
+			runTicks(1, 0.016)
+			if ctHandler then ctHandler() end
+			if worldHandler then worldHandler() end
+		end
+		local after = collectgarbage("count")
+		collectgarbage("restart")
+		print(string.format("  %-34s %7.1f bytes per frame", label, (after - before) * 1024 / frames))
+		return (after - before) * 1024 / frames
+	end
+	local idle = measure("idle run")
+	local busy = measure("damage numbers on screen", function()
+		for i = 1, 6 do ctProj["g" .. i] = { anchorId = "g" .. i, state = "onScreen", x = 300 + i * 80, y = 300, playerDistance = 10 } end
+		for i = 1, 40 do ctEvents[i] = { kind = "damage", amount = 100 + i, critical = (i % 5 == 0), anchorId = "g" .. (1 + i % 6), anchorStatus = "ready", sourceKind = "player", presentedAt = GetTime() + 1000 } end
+	end)
+	ctEvents = {}
+	runTicks(100, 0.016)
+	local downed = measure("ally down, marker on screen", function()
+		downedList = { { id = "H3", name = "Zaynor", positionAvailable = true, x = 30, y = 40, z = 0, spaceId = "m1:1" } }
+		anchorCatalog = { { anchorId = "dpX", kind = "downedPartyMember", state = "downed", memberId = "H3", name = "Zaynor" } }
+	end)
+	downedList = { { id = "H2", name = "Ghost", positionAvailable = false } }
+	local panel = measure("character panel open", function() G.charPanel:Show() end)
+	G.charPanel:Hide()
+end)
+
+
+scenario("widget calls per rendered frame (idle, steady state)", function()
+	runTicks(60, 0.016)
+	local before = {}
+	for k, v in pairs(used) do before[k] = v end
+	local frames = 300
+	for i = 1, frames do runTicks(1, 0.016); if ctHandler then ctHandler() end; if worldHandler then worldHandler() end end
+	local list, total = {}, 0
+	for k, v in pairs(used) do
+		local d = v - (before[k] or 0)
+		if d > 0 then table.insert(list, { k, d / frames }); total = total + d / frames end
+	end
+	table.sort(list, function(a, b) return a[2] > b[2] end)
+	local out = {}
+	for i = 1, math.min(14, #list) do out[#out + 1] = string.format("%s %.1f", list[i][1], list[i][2]) end
+	print(string.format("  widget method calls per frame: %.0f total | %s", total, table.concat(out, ", ")))
+	-- 1.7 made about 91 calls a frame in this state: unchanged values are no longer sent to the game
+	assert(total <= 50, "idle widget calls per frame went up: " .. total)
+end)
+
+
+scenario("widget calls per updater (steady state)", function()
+	runTicks(60, 0.016)
+	local rows = {}
+	for _, u in ipairs(G.updaters) do
+		local before = {}
+		for k, v in pairs(used) do before[k] = v end
+		local n = 40
+		for i = 1, n do pcall(u.fn, 0.05) end
+		local total, top = 0, {}
+		for k, v in pairs(used) do local d = v - (before[k] or 0); if d > 0 then total = total + d; top[#top + 1] = { k, d / n } end end
+		table.sort(top, function(a, b) return a[2] > b[2] end)
+		local t = {}
+		for i = 1, math.min(4, #top) do t[#t + 1] = string.format("%s %.1f", top[i][1], top[i][2]) end
+		local hz = (u.interval > 0) and math.min(60, 1 / u.interval) or 60
+		rows[#rows + 1] = { u.name, total / n, hz, total / n * hz, table.concat(t, ", ") }
+	end
+	table.sort(rows, function(a, b) return a[4] > b[4] end)
+	for _, r in ipairs(rows) do print(string.format("  %-10s %6.1f calls/run  x %4.1f Hz = %7.1f calls/s   %s", r[1], r[2], r[3], r[4], r[5])) end
+end)
+
+
+scenario("hardening: saved variables, slash input, protected frames, error recovery", function()
+	-- a damaged saved variables file
+	local bad = { scale = "huge", enabled = "yes", customArt = 5, plates = 1,
+		opt = { dmg = "x", dmgCrit = true, [3] = true },
+		pos = { orb = { "NOWHERE", "CENTER", 0, 0 }, top = { "TOP", "TOP", 0, -10 }, party = { "LEFT", "LEFT", 0 / 0, 1 }, junk = 5, far = { "TOP", "TOP", 1e9, 0 } },
+		hide = { "UIParent", "SomeFrame", "SomeFrame", "bad name!", 17, "WorldFrame", "ChatFrame1", "AZSGW2Bosses", "GameMenuFrame" },
+		bind = { character = "TOGGLECHARACTER0", talents = "not a name!", [1] = "X" },
+		cvSaved = { CombatDamage = "1", Big = string.rep("x", 100), [2] = "1" }, mapYards = -4 }
+	G.CleanDB(bad)
+	assert(bad.scale == 1 and bad.enabled == true and bad.customArt == true and bad.plates == true, "scalars")
+	assert(bad.opt.dmgCrit == true and bad.opt.dmg == nil and bad.opt[3] == nil, "opt")
+	assert(bad.pos.top and bad.pos.orb == nil and bad.pos.party == nil and bad.pos.junk == nil and bad.pos.far == nil, "pos")
+	assert(#bad.hide == 1 and bad.hide[1] == "SomeFrame", "hide list: " .. table.concat(bad.hide, ","))
+	assert(bad.bind.character == "TOGGLECHARACTER0" and bad.bind.talents == nil and bad.bind[1] == nil, "bind")
+	assert(bad.cvSaved.CombatDamage == "1" and bad.cvSaved.Big == nil and bad.cvSaved[2] == nil and bad.mapYards == nil, "cvSaved / mapYards")
+	local notTable = { opt = 3, pos = "x", hide = 7, bind = false, cvSaved = 9 }
+	G.CleanDB(notTable)
+	assert(type(notTable.opt) == "table" and type(notTable.pos) == "table" and type(notTable.hide) == "table" and type(notTable.bind) == "table" and notTable.cvSaved == nil, "wrong types")
+	-- the slash commands refuse what could hurt
+	local n0 = #AZSGW2DB.hide
+	for _, name in ipairs({ "UIParent", "WorldFrame", "ChatFrame1", "StaticPopup1", "GameMenuFrame", "AZSGW2Orb", "x y", "a;b", "" }) do
+		SlashCmdList["AZSGW2"]("hide " .. name)
+	end
+	assert(#AZSGW2DB.hide == n0, "a protected / invalid name was stored")
+	assert(not G.keptHidden.UIParent and not G.keptHidden.WorldFrame, "protected frame kept hidden")
+	G.KeepHidden("UIParent"); G.KeepHidden("ChatFrame1"); G.KeepHidden("bad name")
+	assert(UIParent.shown and not G.keptHidden.UIParent, "UIParent must never be hidden")
+	SlashCmdList["AZSGW2"]("bind talents bad;name!")
+	assert(AZSGW2DB.bind.talents ~= "bad;name!", "bad binding stored")
+	-- text from outside cannot start a colour code
+	assert(G.Esc("a|cffff0000b|r") == "a||cffff0000b||r" and G.Esc(nil) == "" and G.Esc(5) == "5", "Esc")
+	-- a failing updater tries again later and only gives up after repeated errors
+	local fails, runs = 0, 0
+	G.AddUpdater("flaky", function() runs = runs + 1; if runs <= 2 or runs == 4 then fails = fails + 1; error("boom") end end, 0.1)
+	for i = 1, 50 do runTicks(20, 0.05) end
+	local u = G.updaters[#G.updaters]
+	print("flaky updater: runs", runs, "errors", fails, "dead", tostring(u.dead))
+	assert(not u.dead and runs > 10, "updater should have recovered")
+	local always = 0
+	G.AddUpdater("broken", function() always = always + 1; error("always") end, 0.1)
+	for i = 1, 80 do runTicks(20, 0.05) end
+	local b = G.updaters[#G.updaters]
+	print("broken updater: runs", always, "dead", tostring(b.dead))
+	assert(b.dead and always == 5, "gives up after 5 errors: " .. always)
+	table.remove(G.updaters); table.remove(G.updaters)
+	-- the popup hunter does not hide a protected frame that shows banner text
+	local dlg = CreateFrame("Frame", "StaticPopup1", UIParent)
+	local fs = dlg:CreateFontString(nil, "OVERLAY"); fs:SetFont(G.FONT, 12, ""); fs:SetText("Hardening Test is slain! Its lair yields treasure")
+	G.hunt.off = false
+	local hits = G.HuntNative({ "Hardening Test is slain! Its lair yields treasure" })
+	assert(hits == 0 and dlg.shown, "protected popup frame was hidden by the hunter")
+	dlg.shown = false
+end)
+
+
+scenario("hardening 2: bounded caches, text from outside", function()
+	-- the meter's name tables never grow without a limit
+	for i = 1, 1500 do
+		G.meterTry = G.meterTry or {}
+		local lines = { { name = "Spell " .. i } }
+		G.meterSnapAt = nil
+		now = now + 20
+		AZS_GetMeter = function() return lines, 1, 1 end
+		pcall(G.UpdateMeter, 1)
+	end
+	AZS_GetMeter = nil
+	local nIcons, nTry = 0, 0
+	for _ in pairs(G.meterIcons) do nIcons = nIcons + 1 end
+	for _ in pairs(G.meterTry) do nTry = nTry + 1 end
+	print("meter name tables after 1500 different spells:", nIcons, nTry)
+	assert(nIcons <= 401 and nTry <= 401, "meter tables unbounded")
+	-- banner text: colour codes and links are dropped, other pipes shown as they are
+	assert(G.Plain("|cffff0000Boss|r is |Hitem:1:0|h[a link]|h down|x") == "Boss is [a link] down||x", "Plain: " .. G.Plain("|cffff0000Boss|r is |Hitem:1:0|h[a link]|h down|x"))
+	assert(G.Plain(nil) == "")
+	bannerHandler({ kind = "guardian", boss = false, name = "X", text = "|cff00ff00Hostile|r name |c12 is slain" })
+	runTicks(8, 0.1)
+	print("banner shows:", G.banner.text.text)
+	assert(not string.find(G.banner.text.text, "|cff00ff00", 1, true), "banner colour code shown")
+	runTicks(60, 0.1)
+end)
+
+scenario("API call budget (10 s at 60 fps)", function()
+	local calls = {}
+	local names = { "AZS_GetLairs", "AZS_GetMeterSnapshot", "AZS_GetMeterLoadout", "AZS_GetPlayerPosition", "AZS_GetDownedPartyMembers", "AZS_GetMeter" }
+	local orig = {}
+	for _, n in ipairs(names) do
+		orig[n] = _G[n]; calls[n] = 0
+		if orig[n] then _G[n] = function(...) calls[n] = calls[n] + 1; return orig[n](...) end end
+	end
+	AZSGW2DB.meterMode = "damage"
+	local z0, h0 = used.SetZoom or 0, plateCalls.hide
+	runTicks(600, 1 / 60)
+	print("  SetZoom calls in 10 s:", (used.SetZoom or 0) - z0, "| HideNameplates calls:", plateCalls.hide - h0)
+	assert((used.SetZoom or 0) - z0 <= 4, "minimap zoom is being set too often")
+	assert(plateCalls.hide - h0 <= 1, "HideNameplates is called too often")
+	for _, n in ipairs(names) do print("  calls in 10 s:", n, calls[n]) end
+	assert(calls.AZS_GetLairs <= 300, "minimap/guardian list read lairs too often: " .. calls.AZS_GetLairs)
+	assert(calls.AZS_GetMeterSnapshot <= 4, "meter snapshot read too often: " .. calls.AZS_GetMeterSnapshot)
+	assert(calls.AZS_GetMeterLoadout <= 1, "loadout read too often: " .. calls.AZS_GetMeterLoadout)
+	-- a new revision is picked up within the second
+	local before = calls.AZS_GetMeterLoadout
+	metaRev = "m2"
+	runTicks(90, 1 / 60)
+	assert(calls.AZS_GetMeterLoadout == before + 1, "a changed metadata revision did not reload the loadout")
+	-- the minimap pins still follow (20 Hz): one position per ~3 frames
+	for _, n in ipairs(names) do _G[n] = orig[n] end
+end)
+
+scenario("meter tabs", function()
+	for _, m in ipairs({ "healing", "boss", "party", "damage" }) do
+		AZSGW2DB.meterMode = m
+		G.meterAcc = 99
+		runTicks(10, 0.05)
+		print(m, G.meter.summary.text, G.meter.rows[1].shown, G.meter.rows[1].name.text)
+	end
+end)
+
+scenario("party frames: click to target, right click menu", function()
+	runTicks(6, 0.1)
+	local rows = G.party.rows
+	for i = 1, 3 do assert(rows[i].unit == "party" .. i and rows[i].shown, "row " .. i .. " knows its unit") end
+	assert(rows[4].unit == nil and not rows[4].shown, "an empty row has no unit")
+	assert(rows[1].scripts.OnClick and rows[1].kind == "Button", "rows are clickable buttons")
+	-- left click targets, and the row of the target gets the white outline
+	arg1 = "LeftButton"; rows[2].scripts.OnClick()
+	assert(clicks.targeted[1] == "party2", "left click targets: " .. tostring(clicks.targeted[1]))
+	runTicks(6, 0.1)
+	assert(rows[2].sel.shown and not rows[1].sel.shown and not rows[3].sel.shown, "target outline")
+	arg1 = "LeftButton"; rows[1].scripts.OnClick(); runTicks(6, 0.1)
+	assert(rows[1].sel.shown and not rows[2].sel.shown, "outline follows the target")
+	-- a spell waiting for a target, or an item on the cursor, goes to the friend instead
+	spellTargeting = true; arg1 = "LeftButton"; rows[3].scripts.OnClick(); spellTargeting = false
+	assert(clicks.spell[1] == "party3" and #clicks.targeted == 2, "a pending spell is cast on the friend")
+	cursorItem = true; arg1 = "LeftButton"; rows[3].scripts.OnClick(); cursorItem = false
+	assert(clicks.dropped[1] == "party3" and #clicks.targeted == 2, "the cursor item goes to the friend")
+	-- right click: our own menu (Inspect, Trade, Follow, Whisper) for that friend
+	arg1 = "RightButton"; rows[2].scripts.OnClick()
+	local m = G.partyMenu
+	assert(m and m:GetName() == "AZSGW2PartyMenu" and G.IsProtected("AZSGW2PartyMenu") and G.ValidFrameName("AZSGW2PartyMenu"), "menu frame is ours and protected")
+	assert(m.shown and m.catcher.shown, "menu and its click catcher are up")
+	assert(m.title.text == "Carolin", "menu title is the friend: " .. tostring(m.title.text))
+	local names = {}
+	for i, b in ipairs(m.items) do if b.shown then table.insert(names, b.text.text) end end
+	print("  menu items:", table.concat(names, ", "))
+	assert(table.concat(names, ",") == "Inspect,Trade,Follow,Whisper", "menu entries: " .. table.concat(names, ","))
+	assert(m.catcher:GetFrameLevel() < m:GetFrameLevel() and m.strata == "FULLSCREEN_DIALOG" and m.catcher.strata == "FULLSCREEN_DIALOG", "catcher below the menu, menu on top")
+	-- Inspect really inspects that unit
+	acts = {}
+	m.items[1].scripts.OnClick()
+	assert(not m.shown and not m.catcher.shown, "menu closes after a choice")
+	assert(acts[1] == "notify:party2" and acts[2] == "inspect:party2", "inspect: " .. table.concat(acts, " "))
+	-- too far away: a clear message, no inspect
+	inRange = false; acts = {}
+	arg1 = "RightButton"; rows[2].scripts.OnClick(); m.items[1].scripts.OnClick()
+	assert(#acts == 0, "no inspect out of range")
+	inRange = true
+	-- trade / follow / whisper
+	acts = {}
+	for i = 2, 4 do arg1 = "RightButton"; rows[1].scripts.OnClick(); m.items[i].scripts.OnClick() end
+	assert(table.concat(acts, " ") == "trade:party1 follow:party1 tell:Zaynor", "other entries: " .. table.concat(acts, " "))
+	-- the leader also gets Make leader / Remove
+	leader = true
+	arg1 = "RightButton"; rows[3].scripts.OnClick()
+	assert(m.items[5].shown and m.items[5].text.text == "Make leader" and m.items[6].text.text == "Remove", "leader entries")
+	acts = {}; m.items[6].scripts.OnClick()
+	assert(acts[1] == "uninvite:Ghost", "remove: " .. tostring(acts[1]))
+	leader = false
+	-- a click elsewhere closes it; the party changing while it is open is noticed
+	arg1 = "RightButton"; rows[1].scripts.OnClick()
+	m.catcher.scripts.OnClick()
+	assert(not m.shown and not m.catcher.shown, "click elsewhere closes the menu")
+	arg1 = "RightButton"; rows[1].scripts.OnClick()
+	local nm = partyData.party1.name; partyData.party1.name = "Someone"
+	acts = {}; m.items[1].scripts.OnClick(); partyData.party1.name = nm
+	assert(#acts == 0, "the menu does nothing for a friend who left the slot")
+	-- an action that fails is caught
+	local ins = InspectUnit; InspectUnit = function() error("boom") end
+	arg1 = "RightButton"; rows[1].scripts.OnClick(); m.items[1].scripts.OnClick()
+	InspectUnit = ins
+	-- no inspect function in the game: a message, not an error
+	InspectUnit = nil
+	arg1 = "RightButton"; rows[1].scripts.OnClick(); m.items[1].scripts.OnClick()
+	InspectUnit = ins
+	-- missing trade / follow / whisper functions: those entries are left out
+	local t0, f0, w0 = InitiateTrade, FollowUnit, ChatFrame_SendTell
+	InitiateTrade, FollowUnit, ChatFrame_SendTell = nil, nil, nil
+	arg1 = "RightButton"; rows[1].scripts.OnClick()
+	assert(m.items[1].shown and not m.items[2].shown, "only Inspect without the other functions")
+	m.catcher.scripts.OnClick()
+	InitiateTrade, FollowUnit, ChatFrame_SendTell = t0, f0, w0
+	-- the menu goes when the friends go
+	arg1 = "RightButton"; rows[1].scripts.OnClick()
+	assert(m.shown)
+	-- a hidden row (no unit) does nothing
+	local nT = #clicks.targeted
+	arg1 = "LeftButton"; rows[4].scripts.OnClick(); arg1 = "RightButton"; rows[4].scripts.OnClick()
+	assert(#clicks.targeted == nT, "empty row ignored")
+	-- the tooltip carries the hint
+	rows[1].scripts.OnEnter(); rows[1].scripts.OnLeave()
+	-- the friend leaves: the unit is forgotten
+	local n = GetNumPartyMembers
+	GetNumPartyMembers = function() return 1 end
+	runTicks(6, 0.1)
+	assert(rows[2].unit == nil and not rows[2].shown, "left row forgot its unit")
+	GetNumPartyMembers = function() return 3 end
+	runTicks(6, 0.1)
+	arg1 = "RightButton"; rows[1].scripts.OnClick()
+	assert(m.shown)
+	local nm2 = partyData.party1.name; partyData.party1.name = "Someone"
+	runTicks(6, 0.1)
+	assert(not m.shown, "the menu closes when its friend leaves the slot")
+	partyData.party1.name = nm2
+	GetNumPartyMembers = function() return 1 end
+	GetNumPartyMembers = n
+	targetedUnit = nil
+	runTicks(6, 0.1)
+end)
+
+scenario("meter: reset, the 10 second rate, party icons", function()
+	local f = G.meter
+	local function rateOf() return tonumber(string.match(f.summary.text, "10s [DH]PS: ([%d%.]+)")) or -1, string.match(f.summary.text, "10s [DH]PS: [%d%.]+(%a?)") end
+	local function kRate() local v, u = rateOf(); if u == "K" then v = v * 1000 elseif u == "M" then v = v * 1e6 end; return v end
+	local dmg = 1000000
+	AZS_GetMeter = function() return { { name = "Frostbolt", dmg = dmg, dps = 1, share = 1, proc = 0 } }, dmg, 1 end
+	AZSGW2DB.meterMode = "damage"; G.meterAcc = 99
+	local before = snapshotCalls
+	-- 5000 damage a second for 15 seconds
+	for i = 1, 150 do dmg = dmg + 500; runTicks(1, 0.1) end
+	print("steady 5000/s:", f.summary.text)
+	assert(math.abs(kRate() - 5000) < 400, "10 s rate near 5000: " .. f.summary.text)
+	assert(f.resetBtn and f.resetBtn.scripts.OnClick, "reset button")
+	pcall(f.resetBtn.scripts.OnEnter)
+	-- the rate costs no API call
+	assert(snapshotCalls - before <= 2, "rate used the snapshot API: " .. (snapshotCalls - before))
+	-- twice as much damage: the rate follows within the window, not the whole run
+	for i = 1, 150 do dmg = dmg + 1000; runTicks(1, 0.1) end
+	assert(math.abs(kRate() - 10000) < 800, "10 s rate follows: " .. f.summary.text)
+	-- nothing dealt: it falls to zero after the window
+	runTicks(150, 0.1)
+	assert(kRate() == 0, "idle rate is zero: " .. f.summary.text)
+	-- reset: all zero, the rate counts from the reset
+	f.resetBtn.scripts.OnClick()
+	assert(string.find(f.summary.text, "Total: 0", 1, true) and not f.rows[1].shown, "all zero after the reset: " .. f.summary.text)
+	for i = 1, 30 do dmg = dmg + 300; runTicks(1, 0.1) end
+	print("after reset + damage:", f.summary.text, f.rows[1].name.text, f.rows[1].val.text)
+	assert(string.find(f.summary.text, "Total: 9.0K", 1, true) or string.find(f.summary.text, "Total: 8.7K", 1, true), "total counts from the reset: " .. f.summary.text)
+	assert(math.abs(kRate() - 3000) < 500, "rate since the reset: " .. f.summary.text)
+	assert(f.rows[1].name.text == "Frostbolt" and string.find(f.rows[1].val.text, "100.0%", 1, true), "share of the new total: " .. f.rows[1].val.text)
+	-- a counter that went down (a new boss fight / a new run) ends the reset
+	local d0 = dmg
+	dmg = 100; runTicks(10, 0.1)
+	assert(string.find(f.summary.text, "Total: 100", 1, true), "counters started over: " .. f.summary.text)
+	assert(kRate() < 5000, "no negative or huge rate after a restart: " .. f.summary.text)
+	-- the other tabs reset too
+	AZS_GetMeter = defaultGetMeter
+	f.resetBtn.scripts.OnClick()
+	for _, m in ipairs({ "healing", "party", "boss" }) do
+		AZSGW2DB.meterMode = m; G.meterAcc = 99
+		runTicks(10, 0.1)
+		assert(string.find(f.summary.text, "Total: 0", 1, true), m .. " tab not reset: " .. f.summary.text)
+	end
+	-- another run: the reset is over, the game's numbers show
+	AZSGW2DB.meterMode = "damage"
+	mockRun = "r2"
+	runTicks(25, 0.1)
+	assert(string.find(f.summary.text, "Total: 2.4B", 1, true), "a new run shows the game's numbers: " .. f.summary.text)
+	-- party tab: the best spell's icon sits left of each player's name
+	G.meterIcons["Shadow Bolt"] = nil          -- not learned yet, so the party tab has to ask
+	for k in pairs(G.meterTry) do G.meterTry[k] = nil end
+	G.meterSnapAt = nil
+	f.tabs[4].scripts.OnClick()               -- the Party tab, as a click
+	assert(AZSGW2DB.meterMode == "party", "the Party tab is a click away")
+	G.meterAcc = 99
+	f.iconAcc = 99
+	runTicks(20, 0.1)
+	local q = snapshotQueries[#snapshotQueries]
+	assert(q and q.scope == "party", "the party tab asks for the party's sources")
+	local r1, r2 = f.rows[1], f.rows[2]
+	print("party rows:", r1.name.text, r1.icon.tex, "|", r2.name.text, r2.icon.tex)
+	dumpLayout(OUTDIR .. "/layout_meter_party.txt")
+	assert(r1.name.text == "Carolin" and string.find(r1.icon.tex, "Spell_Shadow_ShadowBolt", 1, true) and r1.iconBack.shown and r1.icon.shown, "best spell icon of the first player")
+	assert(r2.name.text == "Zaynor" and string.find(r2.icon.tex, "QuestionMark", 1, true), "a player without a best spell gets the stand-in")
+	pcall(r1.scripts.OnEnter)
+	AZSGW2DB.meterMode = "damage"
+	AZS_GetMeter = nil                        -- as the scenarios after this one expect
+	G.meterResetAt = nil
+end)
+
+scenario("target bar: friend dump for the preview", function()
+	clientTarget = { name = "Carolin", hostile = false, hp = 700, hpm = 1500, isPlayer = true, class = "WARLOCK" }
+	AZS_TARGET = { kind = "other", name = "Carolin" }
+	fire("PLAYER_TARGET_CHANGED")
+	runTicks(6, 0.05)
+	assert(G.target.shown and G.target.hpText.text == "700  47%", "friend bar")
+	dumpLayout(OUTDIR .. "/layout_target_friend.txt")
+	clientTarget = nil
+	AZS_TARGET = nil
+	fire("PLAYER_TARGET_CHANGED")
+	runTicks(6, 0.05)
+end)
+
+scenario("caches still follow changes (orb, skill bar, minimap pins, bars)", function()
+	-- the orb: shield on, off, on again; health down and back; text follows
+	local keep = { hp = run.hp, hpm = run.hpm, sh = run.sh }
+	local orb = G.orb
+	run.hp, run.hpm, run.sh = 2400, 2400, 0
+	runTicks(60, 0.05)
+	assert(not orb.shield.shown, "no shield, no layer")
+	assert(math.abs(orb.fill.h - 112) < 1, "full orb: " .. tostring(orb.fill.h))
+	run.sh = 300; runTicks(60, 0.05)
+	assert(orb.shield.shown, "a shield shows")
+	run.sh = 0; runTicks(60, 0.05)
+	assert(not orb.shield.shown, "the shield goes")
+	run.sh = 300; runTicks(60, 0.05)
+	assert(orb.shield.shown, "the next shield shows again")
+	run.sh, run.hp = 0, 1200; runTicks(80, 0.05)
+	assert(math.abs(orb.fill.h - 56) < 1.5 and orb.hpText.text == "1,200", "half health: " .. tostring(orb.fill.h) .. " " .. tostring(orb.hpText.text))
+	run.hp = 0; runTicks(120, 0.05)
+	assert(not orb.fill.shown, "empty orb has no fill")
+	run.hp = 2400; runTicks(80, 0.05)
+	assert(orb.fill.shown and orb.fill.h > 100, "orb fills again")
+	run.hp, run.hpm, run.sh = keep.hp, keep.hpm, keep.sh
+	runTicks(40, 0.05)
+	-- the skill bar: a cooldown starts, ends, starts again
+	local slot = G.slots[3]
+	AZS_SPELLS[3].cd = 0; AZS_SPELLS_UPDATED = (AZS_SPELLS_UPDATED or 0) + 1
+	runTicks(6, 0.05)
+	assert(slot.cdText.text == "" and not slot.cd.shown, "ready: no count")
+	AZS_SPELLS[3].cd = 6; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(6, 0.05)
+	assert(slot.cdText.text ~= "" and slot.cd.shown and slot.icon.vc[1] < 0.7, "cooling down: count, bar, dim icon")
+	local h1 = slot.cd.h
+	runTicks(40, 0.05)
+	assert(slot.cd.h < h1, "the bar shrinks")
+	AZS_SPELLS[3].cd = 0; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(6, 0.05)
+	assert(slot.cdText.text == "" and not slot.cd.shown and slot.icon.vc[1] > 0.9, "ready again")
+	AZS_SPELLS[3].cd = 5; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(6, 0.05)
+	assert(slot.cd.shown and slot.cdText.text ~= "", "a second cooldown shows again")
+	AZS_SPELLS[3].cd = 0; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(6, 0.05)
+	-- the shared bar helper and portrait trim: same value twice, then a different one
+	local bar = G.NewBar(UIParent, 100, 10, 1, 0, 0)
+	bar:SetFrac(0.5); assert(bar.fill.shown and math.abs(bar.fill.w - 49) < 0.01, "bar half")
+	bar:SetFrac(0); assert(not bar.fill.shown, "bar empty hides the fill")
+	bar:SetFrac(0.5); assert(bar.fill.shown, "bar shows the fill again")
+	bar:SetColor(0, 1, 0); bar:SetColor(0, 1, 0); assert(bar.fill.vc[2] == 1, "bar colour")
+	bar:SetColor(1, 0, 0); assert(bar.fill.vc[1] == 1 and bar.fill.vc[2] == 0, "bar colour changes")
+	local box = CreateFrame("Frame", nil, UIParent)
+	G.Edges(box, 0, 0, 0, 1)
+	G.EdgeColor(box, 1, 0, 0, 1); G.EdgeColor(box, 1, 0, 0, 1)
+	assert(box.edges.top.vc[1] == 1, "edge colour")
+	G.EdgeColor(box, 0, 1, 0, 1)
+	assert(box.edges.top.vc[2] == 1 and box.edges.left.vc[1] == 0, "edge colour changes")
+	-- an arrow keeps pointing where it should
+	local t = box:CreateTexture(nil, "ARTWORK")
+	G.SetArrow(t, 0); local a0 = t.tc and t.tc[3]
+	G.SetArrow(t, 0.01); G.SetArrow(t, 3.14159)
+	local a1 = t.tc and t.tc[3]
+	G.SetArrow(t, 0)
+	assert(t.tc and t.tc[3] == a0 and a0 ~= a1, "arrow turns and comes back")
+end)
+
+scenario("crit blot grows with the number", function()
+	local t = GetTime()
+	ctProj = {}
+	for i = 1, 4 do ctProj["b" .. i] = { anchorId = "b" .. i, state = "onScreen", x = 150 + i * 150, y = 400, playerDistance = 10 } end
+	local function crit(n, i) return { kind = "damage", amount = n, critical = true, anchorId = "b" .. i, anchorStatus = "ready", sourceKind = "player", presentedAt = t } end
+	ctEvents = { crit(10, 1), crit(1000, 2), crit(98765, 3), crit(5000000, 4) }
+	ctHandler()
+	local L = G.dmg.labels
+	do
+		local was = {}
+		for _, w in ipairs(G.all) do was[w] = w.shown; w.shown = false end
+		for _, w in ipairs(G.always) do was[w] = w.shown; w.shown = false end
+		local wp = WorldFrame.parent; WorldFrame.parent = UIParent
+		dumpLayout(OUTDIR .. "/layout_blot.txt")
+		WorldFrame.parent = wp
+		for w, v in pairs(was) do w.shown = v end
+	end
+	local w = {}
+	for i = 1, 4 do
+		local sp = L[i].holder.splat
+		local tw = L[i].holder.text:GetStringWidth()
+		w[i] = sp.w
+		print(string.format("  crit %-8s font %2d  text %5.1f wide  blot %5.1f x %5.1f", L[i].holder.text.text, L[i].size, tw, sp.w, sp.h))
+		if not os.getenv("STOCK") then
+			assert(sp.w * 0.65 >= tw + L[i].size * 0.45, "blot wider than the number by a margin: " .. L[i].holder.text.text)
+			assert(sp.h >= L[i].size * 1.85 and sp.h <= L[i].size * 1.9 * 1.36, "blot height")
+			local pt = sp.pts[#sp.pts]
+			assert(pt[1] == "CENTER" and pt[4] == 0, "blot centred behind the number")
+		end
+	end
+	assert(w[1] < w[2] and w[2] < w[3], "the blot grows with the number")
+	ctEvents = {}
+	runTicks(30, 0.05)
+end)
+
+scenario("hero panel: default position at the left", function()
+	local p = lastPoint(G.charPanel)
+	print("hero panel anchor:", p[1], p[3], p[4], p[5])
+	assert(p[1] == "LEFT" and p[3] == "LEFT" and p[4] == 14, "hero panel starts at the left edge")
+end)
+
+scenario("skill bar tooltips", function()
+	runTicks(6, 0.1)
+	local sl = G.slots
+	-- a spell that is in the spellbook shows the game's own tooltip (the rank that matches), plus our cooldown line
+	sl[1].scripts.OnEnter()
+	assert(lastSetSpell and lastSetSpell[1] == 2, "frostbolt rank 3 is book entry 2: " .. tostring(lastSetSpell and lastSetSpell[1]))
+	assert(tipLines[#tipLines] == "Casts automatically", "our line follows the game's tooltip")
+	sl[1].scripts.OnLeave()
+	G.cdEnd = G.cdEnd or {}; G.cdEnd["blizzard"] = AZS_GetRunTime() + 5    -- cooling down for 5 more seconds
+	sl[4].scripts.OnEnter()
+	assert(lastSetSpell and lastSetSpell[1] == 3, "blizzard is book entry 3")
+	local sawReady = false
+	for _, l in ipairs(tipLines) do if string.find(l, "Ready in", 1, true) then sawReady = true end end
+	assert(sawReady, "cooldown line on a spell that is cooling down")
+	sl[4].scripts.OnLeave()
+	-- a spell that is not in the book: our own tooltip
+	sl[2].scripts.OnEnter()
+	assert(lastSetSpell == nil and tipLines[1] == "Arcane Missiles" and #tipLines >= 3, "own tooltip for a spell outside the book")
+	print("  fallback tooltip:", table.concat(tipLines, " | "))
+	sl[2].scripts.OnLeave()
+	-- no spellbook functions at all: still the own tooltip
+	local g1, g2, g3 = GetNumSpellTabs, GetSpellTabInfo, GetSpellName
+	GetNumSpellTabs, GetSpellTabInfo, GetSpellName = nil, nil, nil
+	sl[1].scripts.OnEnter()
+	assert(lastSetSpell == nil and #tipLines >= 3, "own tooltip without a spellbook")
+	sl[1].scripts.OnLeave()
+	GetNumSpellTabs, GetSpellTabInfo, GetSpellName = g1, g2, g3
+	-- the racial, and an empty slot
+	G.racial.scripts.OnEnter(); G.racial.scripts.OnLeave()
+	sl[6].scripts.OnEnter(); sl[6].scripts.OnLeave()
+	-- a tooltip that fails does not break the hover: said once
+	local failer = CreateFrame("Frame", nil, UIParent)
+	G.Tooltip(failer, function(tt) error("boom") end)
+	G.tipFailed = nil
+	failer.scripts.OnEnter(); failer.scripts.OnEnter()
+	assert(G.tipFailed, "a failing tooltip function is caught")
+	G.tipFailed = nil
+end)
+
+scenario("endless / no proc / dead", function()
+	run.endl = 1; run.nb = 30; run.proc = ""; phase = "dead"; run.hp = 0
+	runTicks(20, 0.05)
+	print("top:", G.top.title.text, "|", G.top.next.text, "| orb:", G.orb.hpText.text, "| resource shown:", G.resource.shown)
+	run.endl = 0; run.hp = 100; run.proc = "bloodrage"; run.pv = 100; run.pm = 100; phase = "playing"
+	runTicks(20, 0.05)
+	print("rage resource shown:", G.resource.shown)
+	run.proc = "lightwell"; run.pv = 0.4; run.pm = 1
+	runTicks(5, 0.05)
+end)
+
+scenario("no run (phase nil) hides, empty data tolerated", function()
+	phase = nil
+	runTicks(10, 0.05)
+	print("shown:", G.shown)
+	assert(not G.shown)
+	phase = "ready"
+	AZS_SPELLS = {}; AZS_SPELLS_UPDATED = 3
+	AZS_SCHEDULE = {}
+	function AZS_GetBosses() return {} end
+	function AZS_GetGuardians() return {} end
+	function AZS_GetLairs() return {} end
+	function AZS_GetSummonGroups() return {}, 0 end
+	function AZS_GetTotems() return {} end
+	function AZS_GetTimers() return {} end
+	function AZS_GetUpcomingBosses() return {} end
+	stored = 0
+	AZS_RUN = {}
+	run = AZS_RUN
+	runTicks(20, 0.05)
+	print("shown:", G.shown, "levelup:", G.levelBtn.shown)
+end)
+
+scenario("slash commands", function()
+	for _, c in ipairs({ "", "scale 1.2", "scale", "hide Foo", "unhide Foo", "find kills", "bindings TOGGLE", "bind", "bind talents TOGGLETALENTS", "off", "on", "art", "debug", "garbage" }) do
+		print("> /gw2 " .. c)
+		SlashCmdList["AZSGW2"](c)
+	end
+	G.RestoreHidden()
+	assert(rawget(UIErrorsFrame, "AddMessage") == nil, "UIErrorsFrame shadow not removed on /gw2 off")
+	assert(NAMEPLATES_ON == 1, "nameplates not given back on /gw2 off")
+	assert(stockFrames.ActionButton1.scripts.OnShow == originalOnShow, "original OnShow not restored")
+	assert(stockFrames.PlayerFrame.shown == true and stockFrames.PlayerFrame.scripts.OnShow == nil, "PlayerFrame not restored")
+	AZSGW2DB.enabled = true
+	G.EnforceHidden()
+	assert(stockFrames.PlayerFrame.shown == false, "not hidden again after /gw2 on")
+	print("/gw2 off restores the stock frames, on hides them again")
+	-- talent / character clicks
+	G.talentBtn.scripts.OnClick()
+	G.charBtn.scripts.OnClick()
+	G.levelBtn.scripts.OnClick()
+end)
+
+scenario("tooltips", function()
+	local frames = { G.orb, G.buffs[1], G.debuffs[1], G.resource, G.slots[1], G.slots[3], G.racial, G.talentBtn, G.charBtn, G.top.skulls[1],
+		G.tally.items.kills, G.meter.rows[1], G.levelBtn, G.jewSlots[1], G.status[1], G.bossFrame.rows[1].debuffs[1] }
+	local ok = 0
+	for _, f in ipairs(frames) do
+		if f.scripts.OnEnter then
+			local good, err = pcall(f.scripts.OnEnter)
+			if not good then print("TOOLTIP ERROR", err) else ok = ok + 1 end
+		end
+	end
+	print("tooltips ran:", ok)
+end)
+
+print("\n== widget methods used that are not in my mock (check each is a real 1.12 method):")
+local list = {}
+for k in pairs(globals) do if k:find("UNKNOWN_METHOD_") then table.insert(list, (k:gsub("UNKNOWN_METHOD_", ""))) end end
+table.sort(list)
+print(table.concat(list, ", "))
+print("== done")

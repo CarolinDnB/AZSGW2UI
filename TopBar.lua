@@ -84,7 +84,8 @@ function G.BuildTop()
 	f.title:SetPoint("TOP", f, "TOP", 0, -6);
 	f.title:SetTextColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
 
-	-- the difficulty (Normal, Heroic I-V) at the left of the title row, the Heroic affixes at the right
+	-- the difficulty (Normal, Heroic I-V) at the left of the title row; the Heroic affixes sit at the right end of the
+	-- line under the bar, and the next boss moves to its left end while there are affixes (the title row is full)
 	local dg = CreateFrame("Frame", nil, f);
 	dg:SetWidth(112);
 	dg:SetHeight(18);
@@ -107,7 +108,7 @@ function G.BuildTop()
 	end, "ANCHOR_BOTTOM");
 	f.diff = dg;
 	f.affix = G.Text(f, 11, "RIGHT");
-	f.affix:SetPoint("TOPRIGHT", f, "TOPRIGHT", -10, -8);
+	f.affix:SetPoint("TOPRIGHT", f, "TOPRIGHT", -10, -41);
 	f.affix:SetTextColor(0.85, 0.85, 0.88);
 
 	f.bar = G.NewBar(f, BARW, 10, 0.70, 0.07, 0.07);
@@ -213,9 +214,18 @@ function G.UpdateTop(dt)
 		f.diff.text:SetText(d.short);
 		f.diff.text:SetTextColor(d.r, d.g, d.b);
 		if ( table.getn(d.affixes) > 0 ) then
-			f.affix:SetText(table.concat(d.affixes, "  -  "));
+			f.affix:SetText(table.concat(d.affixes, " - "));
 		else
 			f.affix:SetText("");
+		end
+		f.affixLen = table.getn(d.affixes);
+		f.next:ClearAllPoints();
+		if ( f.affixLen > 0 ) then
+			f.next:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -41);
+			f.next:SetJustifyH("LEFT");
+		else
+			f.next:SetPoint("TOP", f, "TOP", 0, -41);
+			f.next:SetJustifyH("CENTER");
 		end
 	end
 
@@ -239,6 +249,15 @@ function G.UpdateTop(dt)
 	end
 	f.next:SetText(line);
 	f.next:SetTextColor(r, g, b);
+	-- the affixes only show when both texts fit on the line (the difficulty tooltip lists them anyway)
+	if ( ( f.affixLen or 0 ) > 0 ) then
+		local room = f:GetWidth() - 20 - 8;
+		if ( f.next:GetStringWidth() + f.affix:GetStringWidth() <= room ) then
+			f.affix:Show();
+		else
+			f.affix:Hide();
+		end
+	end
 end
 
 ------------------------------------------------------------------------ tally (kills / gold / cache price)
@@ -363,7 +382,8 @@ local BARH = 16;
 local LEFTW = 30;        -- room left of the bars for the red skull
 local HEADH = 24;        -- the title line (only when more than one enemy is listed)
 local NOHEAD = 2;        -- one enemy: its own row says everything, there is no title above it
-local ROWMAX = 62;
+local ROWH = 45;          -- one row: the name line and the health bar (the effect timer bar is gone)
+local ROWMAX = ROWH + 17;  -- room kept per row in the container
 
 -- the skull and the crown come from bar_icons.tga (own drawing, drawn at twice the size they are shown
 -- at: "big" 32 px, "small" 24 px, "tiny" 16 px skulls and a 16 px crown); stock art falls back to the
@@ -517,15 +537,6 @@ function G.BuildBosses()
 			end
 		end, "ANCHOR_BOTTOM");
 
-		-- the timed effect that ends soonest, as a second bar
-		row.timer = NewFlatBar(row, BARW, BARH, true);
-		row.timer:SetPoint("TOPLEFT", row, "TOPLEFT", 0, -40);
-		row.timer.name = G.TextS(row.timer, 12, "LEFT");
-		row.timer.name:SetPoint("LEFT", row.timer, "LEFT", 6, 0);
-		row.timer.time = G.TextS(row.timer, 12, "RIGHT");
-		row.timer.time:SetPoint("RIGHT", row.timer, "RIGHT", -6, 0);
-		row.timer:Hide();
-
 		-- debuffs: small framed icons at the top right, newest nearest the edge
 		row.debuffs = {};
 		for j = 1, DEBUFFS do
@@ -565,7 +576,7 @@ local DISPELCOL = {
 	Disease = { 0.65, 0.45, 0.10 }, Poison = { 0.10, 0.65, 0.15 },
 };
 
--- fills one row; returns how tall it came out
+-- fills one row; returns how tall it is
 local function FillRow(row, e)
 	row:Show();
 	row.entry = e;
@@ -595,7 +606,6 @@ local function FillRow(row, e)
 	row.pct:SetText(string.format("%d%%", math.floor(frac * 100 + 0.5)));
 
 	local deb = e.debuffs or {};
-	local soon = nil;
 	local shownDeb = 0;
 	for j = 1, DEBUFFS do
 		local d = row.debuffs[j];
@@ -616,11 +626,6 @@ local function FillRow(row, e)
 			end
 			d:Show();
 			shownDeb = shownDeb + 1;
-			if ( x.remaining and not x.permanent and G.Num(x.remaining) > 0 ) then
-				if ( not soon or x.remaining < soon.remaining ) then
-					soon = x;
-				end
-			end
 		else
 			d.data = nil;
 			d:Hide();
@@ -634,20 +639,7 @@ local function FillRow(row, e)
 		row.name:SetWidth(nameW);
 	end
 
-	if ( soon ) then
-		local dur = G.Num(soon.duration);
-		local f2 = 1;
-		if ( dur > 0 ) then
-			f2 = G.Clamp(soon.remaining / dur, 0, 1);
-		end
-		row.timer:Show();
-		row.timer:SetFrac(f2);
-		row.timer.name:SetText(tostring(soon.name or ""));
-		row.timer.time:SetText(string.format("%.1f", soon.remaining));
-		return ROWMAX;
-	end
-	row.timer:Hide();
-	return ROWMAX - 17;
+	return ROWH;
 end
 
 function G.UpdateBosses(dt)
@@ -739,7 +731,8 @@ end
 ------------------------------------------------------------------------ target bar (normal and elite enemies)
 
 -- the API gives health for special enemies and for your target only, so this one compact bar
--- stands in for the enemy nameplates. Bosses and guardians have their own bars above.
+-- stands in for the enemy nameplates (red for enemies, gold for elites, green for friends).
+-- Bosses and guardians have their own bars above.
 function G.BuildTarget()
 	local f = CreateFrame("Frame", "AZSGW2Target", UIParent);
 	f:SetWidth(240);
@@ -793,6 +786,22 @@ local function SpecialByName(name)
 	return found, count;
 end
 
+-- a friendly target (a hero, yourself, a friendly creature): the same bar, green. The client knows a friend's health;
+-- for a creature it may only know a percentage (the maximum then reads 100).
+local function FriendInfo(name)
+	local hp, hpm = G.Num(UnitHealth and UnitHealth("target")), G.Num(UnitHealthMax and UnitHealthMax("target"));
+	if ( UnitIsDeadOrGhost and UnitIsDeadOrGhost("target") ) then
+		return "friend", name, 0, math.max(hpm, 0), 0;
+	end
+	if ( hpm <= 0 ) then
+		return "friend", name, 0, 0, 1;
+	end
+	if ( hpm == 100 ) then
+		return "friend", name, 0, 0, hp / 100;
+	end
+	return "friend", name, hp, hpm, hp / hpm;
+end
+
 -- what the bar should show right now: nil (hide) or kind, name, hp, hpm, percent
 function G.TargetInfo()
 	if ( UnitExists and not UnitExists("target") ) then
@@ -802,6 +811,9 @@ function G.TargetInfo()
 	local t = AZS_TARGET;
 	local fresh = ( t and name and t.name == name );
 	if ( fresh ) then
+		if ( t.kind == "player" or t.kind == "other" ) then
+			return FriendInfo(name);
+		end
 		if ( ( t.kind == "normal" or t.kind == "elite" ) and G.Num(t.hpm) > 0 ) then
 			return t.kind, t.name, G.Num(t.hp), G.Num(t.hpm), G.Num(t.hp) / G.Num(t.hpm);
 		end
@@ -812,7 +824,7 @@ function G.TargetInfo()
 		return nil;
 	end
 	if ( UnitCanAttack and not UnitCanAttack("player", "target") ) then
-		return nil;
+		return FriendInfo(name);
 	end
 	if ( UnitIsDead and UnitIsDead("target") ) then
 		return nil;
@@ -858,20 +870,49 @@ function G.UpdateTarget(dt)
 	end
 	f:Show();
 	G.PlaceBosses(true);
-	f.name:SetText(tostring(name));
-	if ( kind == "elite" ) then
-		f.name:SetTextColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
-		f.bar:SetColor(0.80, 0.50, 0.08);
-	else
-		f.name:SetTextColor(1, 1, 1);
-		f.bar:SetColor(0.78, 0.12, 0.10);
+	name = G.Esc(name);
+	if ( f.shownName ~= name or f.shownKind ~= kind ) then
+		f.shownName, f.shownKind = name, kind;
+		f.name:SetText(name);
+		if ( kind == "elite" ) then
+			f.name:SetTextColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+			f.bar:SetColor(0.80, 0.50, 0.08);
+		elseif ( kind == "friend" ) then
+			-- a friend: the same bar in green, the name in the class colour (a hero) or soft green (a creature)
+			local token = nil;
+			if ( UnitClass and UnitIsPlayer and UnitIsPlayer("target") ) then
+				local _, tk = UnitClass("target");
+				token = tk and string.lower(tk) or nil;
+			end
+			if ( token ) then
+				f.name:SetTextColor(G.ClassColor(token));
+			else
+				f.name:SetTextColor(0.70, 1, 0.70);
+			end
+			f.bar:SetColor(0.30, 0.72, 0.22);
+		else
+			f.name:SetTextColor(1, 1, 1);
+			f.bar:SetColor(0.78, 0.12, 0.10);
+		end
 	end
 	frac = G.Clamp(frac, 0, 1);
-	f.bar:SetFrac(frac);
-	local pct = string.format("%d%%", math.floor(frac * 100 + 0.5));
-	if ( hpm > 0 ) then
-		f.hpText:SetText(G.Short(hp) .. "  " .. pct);
+	local text;
+	if ( kind == "friend" and frac <= 0 and UnitIsDeadOrGhost and UnitIsDeadOrGhost("target") ) then
+		text = "Downed";
 	else
-		f.hpText:SetText(pct);
+		local pct = string.format("%d%%", math.floor(frac * 100 + 0.5));
+		if ( hpm > 0 ) then
+			text = G.Short(hp) .. "  " .. pct;
+		else
+			text = pct;
+		end
+	end
+	if ( f.shownFrac ~= frac ) then
+		f.shownFrac = frac;
+		f.bar:SetFrac(frac);
+	end
+	if ( f.shownText ~= text ) then
+		f.shownText = text;
+		f.hpText:SetText(text);
 	end
 end
