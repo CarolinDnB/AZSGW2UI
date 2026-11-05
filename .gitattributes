@@ -1,7 +1,8 @@
-# Left out of the zip that the release workflow builds (players do not need these)
+# The release zip is built from the AZSGW2UI folder only (see ADDON_DIR in .github/workflows/release.yml),
+# so README.md, CHANGELOG.md, tools/ and other files at the top of the repo are never in it.
+# These two lines are belt and braces:
 .github export-ignore
 .gitattributes export-ignore
-tools export-ignore
 
 # Never change the line endings of textures and fonts
 *.tga binary

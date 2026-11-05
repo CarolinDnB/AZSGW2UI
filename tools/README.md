@@ -1,22 +1,24 @@
 # AZSGW2UI developer tools
 
-Everything here is optional. The addon itself is the folder above this one (the repository root: `AZSGW2UI.toc`, the `.lua`
-files, `Textures/`, `Fonts/`); these scripts only help to test it and to regenerate its art without the game.
+Everything here is optional. The addon itself is the `AZSGW2UI/` folder next to this one; these scripts only help to test it
+and to regenerate its art without the game.
 
 ## Layout of the repository
 
-    AZSGW2UI.toc, *.lua   the addon (the release zip puts these in a folder named AZSGW2UI)
-    Textures/, Fonts/     art and font
-    README.md, CHANGELOG.md
-    tools/                this folder: not part of the release zip (see .gitattributes)
+    AZSGW2UI/             the addon: every file the game needs, and nothing else. The release zip is exactly this folder.
+      AZSGW2UI.toc, *.lua
+      Textures/, Fonts/
+    README.md, CHANGELOG.md   documentation: not in the zip
+    tools/                this folder: not in the zip
       harness.lua         strict WoW 1.12 / Lua 5.0 mock + test scenarios (no game needed)
       run_lua.py          runs a Lua file with the system liblua (see below)
-      make_textures.py    draws every texture in Textures/ (pure Python + numpy + Pillow)
+      make_textures.py    draws every texture in AZSGW2UI/Textures (pure Python + numpy + Pillow)
       render_layout.py    turns a layout dump of the harness into a PNG preview
     .github/workflows/release.yml   the Release workflow (Actions tab > Release > Run workflow)
-    .gitattributes        what is left out of the release zip
+    .gitattributes        line-ending rules for textures and fonts
 
-The same scripts also work in an older "source package" layout, where the addon sits in an `AZSGW2UI/` folder next to `tools/`.
+Anything that should reach players goes into `AZSGW2UI/`. Anything else (docs, screenshots, design files, scripts) goes next
+to it at the top of the repo and stays out of the zip without any extra setting.
 
 ## Running the tests
 
@@ -34,7 +36,7 @@ know - check each of those against the 1.12 API. A clean run ends with `== done`
 
 Environment variables:
 
-- `AZS_ROOT` - the addon folder, or the folder that holds `AZSGW2UI/` (default: `..`, one up from `tools/`)
+- `AZS_ROOT` - the folder that holds `AZSGW2UI/` (default: `..`, one up from `tools/`, which is the repository root)
 - `AZS_OUT`  - where the layout dumps (`layout_*.txt`) are written (default: the current folder)
 - `STOCK=1`  - test the plain-colour art mode
 
@@ -50,7 +52,7 @@ A mock is not the game, so a clean run is a good sign and not a guarantee.
 
 ## Regenerating the textures
 
-    python3 make_textures.py                  # writes into ../Textures (or ../AZSGW2UI/Textures in the old layout)
+    python3 make_textures.py                  # writes into ../AZSGW2UI/Textures
     AZS_TEXTURES=/some/folder python3 make_textures.py
 
 Needs `numpy` and `Pillow`. Output is deterministic: running it again gives byte-identical files. All textures are
@@ -59,12 +61,12 @@ only at start, so restart it after changing one.
 
 ## Releasing
 
-1. Update `CHANGELOG.md` and the "Changes" part of `README.md`.
+1. Update `CHANGELOG.md` and the "Changes" part of `README.md` (both at the top of the repo).
 2. Run both harness modes above; they must end with `== done` and no `LUA ERROR`.
 3. Commit and push to `main`.
 4. On GitHub: Actions > **Release** > **Run workflow**, type the new version as three numbers (`1.9.0`, no `v`).
-   The workflow sets `## Version:` in `AZSGW2UI.toc`, tags `v1.9.0`, builds `AZSGW2UI.zip` (the addon folder only, without
-   `tools/`) and publishes the release. A version number can be used once. Then Fetch / Pull in GitHub Desktop.
+   The workflow sets `## Version:` in `AZSGW2UI/AZSGW2UI.toc`, tags `v1.9.0`, builds `AZSGW2UI.zip` from the `AZSGW2UI/` folder
+   only, and publishes the release. A version number can be used once. Then Fetch / Pull in GitHub Desktop.
 
 ## Licence and credits
 

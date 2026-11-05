@@ -2,6 +2,8 @@ name: Release
 
 # Runs by hand: Actions tab > Release > Run workflow, then type the new version (three numbers, no "v", e.g. 1.2.0).
 # It sets "## Version:" in the .toc, tags the release as v<version>, builds <ADDON>.zip and publishes it as a GitHub release.
+# The zip is built from the addon folder only (ADDON_DIR). Everything else in the repo (README.md, CHANGELOG.md, tools/, .github/)
+# is not in the zip, so new files at the top of the repo never end up in the player's download.
 on:
   workflow_dispatch:
     inputs:
@@ -18,9 +20,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # The only line to edit: the name of your .toc file without ".toc".
-  # It is also the name of the addon folder inside the zip.
+  # The name of your .toc file without ".toc". It is also the name of the addon folder inside the zip.
   ADDON: AZSGW2UI
+  # The folder in the repo that holds the .toc and every file of the addon. Only this folder goes into the zip.
+  ADDON_DIR: AZSGW2UI
 
 jobs:
   release:
@@ -61,12 +64,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f "${ADDON}.toc" ]; then
-            echo "::error::${ADDON}.toc is not at the top of the repository. Check the ADDON line at the top of this file."
+          if [ ! -f "${ADDON_DIR}/${ADDON}.toc" ]; then
+            echo "::error::${ADDON_DIR}/${ADDON}.toc was not found. Check the ADDON and ADDON_DIR lines at the top of this file."
             exit 1
           fi
-          if ! grep -q '^## Version:' "${ADDON}.toc"; then
-            echo "::error::${ADDON}.toc has no '## Version:' line."
+          if ! grep -q '^## Version:' "${ADDON_DIR}/${ADDON}.toc"; then
+            echo "::error::${ADDON_DIR}/${ADDON}.toc has no '## Version:' line."
             exit 1
           fi
 
@@ -75,11 +78,11 @@ jobs:
         run: |
           set -euo pipefail
           # [^\r]* keeps a Windows line ending on that line if the file has one
-          sed -i -E "s/^## Version:[^\r]*/## Version: ${VERSION}/" "${ADDON}.toc"
+          sed -i -E "s/^## Version:[^\r]*/## Version: ${VERSION}/" "${ADDON_DIR}/${ADDON}.toc"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet -- "${ADDON}.toc"; then
-            git add "${ADDON}.toc"
+          if ! git diff --quiet -- "${ADDON_DIR}/${ADDON}.toc"; then
+            git add "${ADDON_DIR}/${ADDON}.toc"
             git commit -m "Release ${VERSION}"
           fi
           git tag -a "v${VERSION}" -m "${ADDON} ${VERSION}"
@@ -89,8 +92,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # git archive honours .gitattributes: files marked export-ignore are left out
-          git archive --format=zip --prefix="${ADDON}/" --output="${ADDON}.zip" "v${VERSION}"
+          # Only the ADDON_DIR folder of the tag goes in (the "tag:folder" form), and it is put inside a folder named ${ADDON}.
+          # git archive also honours .gitattributes: files marked export-ignore are left out
+          git archive --format=zip --prefix="${ADDON}/" --output="${ADDON}.zip" "v${VERSION}:${ADDON_DIR}"
           unzip -l "${ADDON}.zip"
           if ! unzip -Z1 "${ADDON}.zip" | grep -qx "${ADDON}/${ADDON}.toc"; then
             echo "::error::${ADDON}/${ADDON}.toc is not in the zip."
