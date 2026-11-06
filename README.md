@@ -156,7 +156,9 @@ Unlocked, every frame gets a gold box with its name and size: drag it to move it
 - Marks: the game's skull goes on a boss and a cross on a guardian when you target them (a boss also when you point at it).
   Only a unit you target or point at can be marked, and a guardian is only known as one once targeted. An existing mark is never
   changed; one you remove stays removed until you target that enemy again. `/gw2 marks off` stops it. Whether a mark can be set
-  depends on the game (in a party, perhaps only the leader); `/gw2 plates debug` says whether the functions exist.
+  depends on the game (in a party, perhaps only the leader); `/gw2 plates debug` says whether the functions exist, which unit was
+  marked last and how many were left unmarked. A unit is only marked when this run's list of special enemies holds that kind under
+  its name (the game's kind can trail a click by a moment), and four marks within 30 seconds switch the option off by itself.
 - Two health bars on a nameplate: the game's own bar became visible again next to ours (most likely when it gives a plate to a
   new enemy). The addon now looks at every plate again and hides it whenever it comes back; if it still happens,
   `/gw2 plates debug` lists the parts of two plates with their alpha, please send that.

@@ -1330,10 +1330,23 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	GetRaidTargetIndex = function(u) return marked[u] end
 	AZS_UnitKind = function(u) return kinds[u] end
 	assert(G.Opt("marks") == true, "marking is on by default")
+	-- what the game says: the list of special enemies alive and the target table, in step with the kind
+	local function listed(name, kind)
+		AZS_UNITS = { { kind = "elite", id = 1, name = "Bone Warden", hp = 3000, hpm = 5000, state = 0 } }
+		if kind == "boss" or kind == "guardian" or kind == "final" or kind == "elite" then
+			table.insert(AZS_UNITS, { kind = kind, id = 9, name = name, hp = 100, hpm = 100, state = 0 })
+		end
+	end
+	local function gameSays(name, kind)
+		kinds.target = kind
+		listed(name, kind)
+		AZS_TARGET = { kind = kind or "none", id = 9, name = name, hp = 100, hpm = 100, state = 0 }
+	end
 	local function target(name, kind)
+		now = now + 40                                       -- marks of a moment ago are not a burst
 		setCalls = {}; marked.target = nil
 		clientTarget = { name = name, hostile = true, hp = 100, hpm = 100, class = "normal" }
-		kinds.target = kind
+		gameSays(name, kind)
 		fire("PLAYER_TARGET_CHANGED")
 	end
 	target("Lord Ashvane", "boss"); runTicks(4, 0.1)
@@ -1350,7 +1363,7 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	assert(#setCalls == 1 and setCalls[1] == "target=8", "final boss: " .. table.concat(setCalls, ","))
 	-- a mark that is already there is left alone
 	setCalls = {}; marked.target = 3
-	clientTarget = { name = "Lord Ashvane", hostile = true, hp = 100, hpm = 100, class = "normal" }; kinds.target = "boss"
+	clientTarget = { name = "Lord Ashvane", hostile = true, hp = 100, hpm = 100, class = "normal" }; gameSays("Lord Ashvane", "boss")
 	fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
 	assert(#setCalls == 0 and marked.target == 3, "an existing mark was changed")
 	-- the kind is not known yet when the target changes: it is waited for a little
@@ -1358,8 +1371,58 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	clientTarget = { name = "Late One", hostile = true, hp = 100, hpm = 100, class = "normal" }
 	fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
 	assert(#setCalls == 0)
-	kinds.target = "guardian"; runTicks(4, 0.1)
+	gameSays("Late One", "guardian"); runTicks(4, 0.1)
 	assert(#setCalls == 1 and setCalls[1] == "target=7", "late kind: " .. table.concat(setCalls, ","))
+	-- the kind trails a click: the target is an ordinary enemy now, the game still says the boss it was before.
+	-- Nothing is marked, whether the game's target table is the old one or already new but the kind is not.
+	now = now + 40
+	gameSays("Lord Ashvane", "boss"); clientTarget = { name = "Lord Ashvane", hostile = true, hp = 100, hpm = 100, class = "normal" }
+	fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
+	now = now + 40; setCalls = {}; marked.target = nil
+	local refused0 = G.marksRefused or 0
+	clientTarget = { name = "Defias Thug", hostile = true, hp = 100, hpm = 100, class = "normal" }
+	fire("PLAYER_TARGET_CHANGED"); runTicks(10, 0.1)
+	assert(#setCalls == 0, "an ordinary enemy was marked with the kind of the target before: " .. table.concat(setCalls, ","))
+	AZS_TARGET = { kind = "normal", id = 3, name = "Defias Thug", hp = 100, hpm = 100, state = 0 }; runTicks(10, 0.1)
+	assert(#setCalls == 0, "an ordinary enemy was marked with the kind of the target before (target table caught up)")
+	kinds.target = "boss"; runTicks(4, 0.1)                  -- a kind that does not fit the unit, even with a list that has a boss
+	assert(#setCalls == 0, "marked a unit that is no boss: the list has no such unit")
+	kinds.target = "normal"; runTicks(40, 0.1)
+	assert(#setCalls == 0 and G.marksRefused > refused0, "the refused kind was not counted")
+	-- and the other way round: the new target is a boss, the game still says ordinary for a moment
+	now = now + 40; setCalls = {}; marked.target = nil
+	gameSays("Defias Thug", "normal")
+	clientTarget = { name = "Lord Ashvane", hostile = true, hp = 100, hpm = 100, class = "normal" }
+	fire("PLAYER_TARGET_CHANGED"); runTicks(10, 0.1)
+	assert(#setCalls == 0)
+	gameSays("Lord Ashvane", "boss"); runTicks(4, 0.1)
+	assert(#setCalls == 1 and setCalls[1] == "target=8", "a boss behind a lagging kind: " .. table.concat(setCalls, ","))
+	-- a list of an old run, or no list: not marked
+	now = now + 40; setCalls = {}; marked.target = nil
+	AZS_UNITS_UPDATED = 50; AZS_ZONE_UPDATED = 100                    -- the list was last changed before this run began
+	fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
+	assert(#setCalls == 0, "marked from the list of the run before")
+	AZS_ZONE_UPDATED = nil; AZS_UNITS_UPDATED = nil
+	local keepList = AZS_UNITS; AZS_UNITS = nil
+	fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
+	assert(#setCalls == 0, "marked with no list at all")
+	AZS_UNITS = keepList
+	-- a mark that is a burst: the fourth within half a minute is not set and the option goes off
+	G.SetOpt("marks", true)
+	now = now + 40; setCalls = {}
+	for _, nm in ipairs({ "Boss A", "Boss B", "Boss C" }) do
+		marked.target = nil
+		clientTarget = { name = nm, hostile = true, hp = 100, hpm = 100, class = "normal" }; gameSays(nm, "boss")
+		fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
+	end
+	assert(#setCalls == 3, "three marks in a row: " .. #setCalls)
+	marked.target = nil
+	clientTarget = { name = "Boss D", hostile = true, hp = 100, hpm = 100, class = "normal" }; gameSays("Boss D", "boss")
+	fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
+	assert(#setCalls == 3 and G.Opt("marks") == false, "a burst of marks was not stopped")
+	G.SetOpt("marks", true); now = now + 40; G.lastMark = nil
+	target("Boss E", "boss"); runTicks(4, 0.1)
+	assert(#setCalls == 1 and G.lastMark and string.find(G.lastMark, "Boss E"), "marking did not carry on after the quiet time")
 	-- and not for ever: a friend (no kind) is not asked about all the time
 	setCalls = {}; kinds.target = nil; marked.target = nil
 	clientTarget = { name = "Zaynor", hostile = false, hp = 100, hpm = 100, class = "rogue" }
@@ -1373,10 +1436,19 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	assert(asked - others <= 20, "marks asked " .. (asked - others) .. " times about a friend")
 	AZS_UnitKind = oldKind
 	-- the unit under the mouse: a boss is known there, a guardian reads as an elite
-	setCalls = {}; marked.mouseover = nil
-	mouseTarget = { name = "Lord Ashvane" }; kinds.mouseover = "boss"
+	now = now + 40; setCalls = {}; marked.mouseover = nil
+	mouseTarget = { name = "Lord Ashvane" }; kinds.mouseover = "boss"; listed("Defias Thug", "normal")
+	fire("UPDATE_MOUSEOVER_UNIT"); runTicks(4, 0.1)
+	assert(#setCalls == 0, "mouseover boss marked, but the list has no such boss")
+	listed("Lord Ashvane", "boss")
 	fire("UPDATE_MOUSEOVER_UNIT"); runTicks(4, 0.1)
 	assert(#setCalls == 1 and setCalls[1] == "mouseover=8", "mouseover boss: " .. table.concat(setCalls, ","))
+	-- the same name is an ordinary elite as well: there is no telling which one is under the mouse
+	now = now + 40; setCalls = {}; marked.mouseover = nil
+	listed("Lord Ashvane", "boss"); table.insert(AZS_UNITS, { kind = "elite", id = 12, name = "Lord Ashvane", hp = 1, hpm = 1, state = 0 })
+	fire("UPDATE_MOUSEOVER_UNIT"); runTicks(4, 0.1)
+	assert(#setCalls == 0, "mouseover: marked a unit that shares its name with an elite")
+	now = now + 40; setCalls = {}; marked.mouseover = nil; listed("Lord Ashvane", "boss")
 	setCalls = {}; marked.mouseover = nil; kinds.mouseover = "elite"
 	fire("UPDATE_MOUSEOVER_UNIT"); runTicks(4, 0.1)
 	assert(#setCalls == 0, "mouseover elite marked")
@@ -1398,6 +1470,7 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	SetRaidTargetIcon, GetRaidTargetIndex = function() error("not allowed") end, s2
 	target("Lord Ashvane", "boss"); runTicks(4, 0.1)
 	SetRaidTargetIcon, GetRaidTargetIndex, AZS_UnitKind = nil, nil, nil
+	AZS_TARGET = nil; AZS_UNITS = nil
 	clientTarget = nil; fire("PLAYER_TARGET_CHANGED")
 	-- back to nothing
 	G.SetOpt("nameplates", false); G.EnforcePlates(); runTicks(4, 0.1)
