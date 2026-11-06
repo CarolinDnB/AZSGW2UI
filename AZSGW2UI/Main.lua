@@ -335,7 +335,7 @@ local function Help()
 	G.Print("/gw2 hunt on|off : look for the game's own popup text on screen (stops itself when it finds none)");
 	G.Print("/gw2 debug : what is hidden, which bindings the buttons use");
 	G.Print("/gw2 version : the version of this UI");
-	G.Print("/gw2 focus : what is under the mouse (point at something that has no tooltip first); /gw2 rows : where the game draws its own skill icons");
+	G.Print("/gw2 focus : what is under the mouse (point at something that has no tooltip first); /gw2 rows [tip [skill]] : where the game draws its own skill icons (tip: and what its tooltips say)");
 end
 
 local function FindFrames(text)
@@ -459,7 +459,21 @@ local function FocusReport()
 end
 
 -- /gw2 rows: where the game draws its own skill icons (frames showing the icon of one of your skills; ours left out)
-local function RowsReport()
+-- what the game's tooltip holds right now (up or not, and its first lines)
+local function PrintGameTooltip(prefix)
+	if ( not ( GameTooltip and GameTooltip.IsShown ) ) then
+		return;
+	end
+	local n = GameTooltip.NumLines and GameTooltip:NumLines() or 0;
+	G.Print(prefix .. "tooltip " .. ( GameTooltip:IsShown() and "up" or "not up" ) .. ", " .. n .. " lines");
+	for i = 1, math.min(n, 6) do
+		local fs = getglobal("GameTooltipTextLeft" .. i);
+		local text = fs and fs.GetText and fs:GetText();
+		G.Print(prefix .. "  " .. ( ( text and text ~= "" ) and G.Plain(text) or "(empty line)" ));
+	end
+end
+
+local function RowsReport(withTip, word)
 	if ( not EnumerateFrames ) then
 		G.Print("this client has no EnumerateFrames.");
 		return;
@@ -477,6 +491,7 @@ local function RowsReport()
 		return;
 	end
 	local found, ours = 0, 0;
+	local hits = {};
 	local f = EnumerateFrames();
 	while ( f ) do
 		if ( f.GetRegions ) then
@@ -486,13 +501,18 @@ local function RowsReport()
 				if ( r.GetObjectType and r:GetObjectType() == "Texture" ) then
 					local tex = r:GetTexture();
 					local what = type(tex) == "string" and want[string.lower(tex)];
+					if ( what and word and word ~= "" and not string.find(string.lower(tostring(what)), word, 1, true) ) then
+						what = nil;              -- only the skill that was asked for
+					end
 					if ( what ) then
 						if ( f.tipTag or f.entry or f.data ) then
 							ours = ours + 1;
 						elseif ( found < 16 ) then
 							found = found + 1;
+							table.insert(hits, { frame = f, what = what });
 							G.Print(G.Plain(what) .. ": " .. Chain(f) .. ( f:IsVisible() and ", visible" or ", hidden" )
-								.. ( r.IsShown and r:IsShown() and "" or ", icon hidden" ));
+								.. ( r.IsShown and r:IsShown() and "" or ", icon hidden" )
+								.. ( f.GetScript and f:GetScript("OnEnter") and ", has a tooltip script" or ", no tooltip script" ));
 						end
 						break;
 					end
@@ -503,6 +523,34 @@ local function RowsReport()
 	end
 	G.Print("frames with a skill icon that are not ours: " .. found .. " (ours: " .. ours .. ")."
 		.. ( found == 0 and " The game's own skill row is not drawn right now." or "" ));
+	if ( withTip ) then
+		-- point at each of them the way the mouse would: what the game's own tooltip says for its icon
+		for i = 1, math.min(table.getn(hits), 8) do
+			local fr = hits[i].frame;
+			G.Print(G.Plain(hits[i].what) .. " (" .. Chain(fr) .. "):");
+			local enter = fr.GetScript and fr:GetScript("OnEnter");
+			if ( enter ) then
+				local keep = this;
+				this = fr;
+				local ok, err = pcall(enter);
+				this = keep;
+				if ( ok ) then
+					PrintGameTooltip("  ");
+				else
+					G.Print("  its tooltip script failed: " .. G.Plain(tostring(err)));
+				end
+				local leave = fr.GetScript and fr:GetScript("OnLeave");
+				if ( leave ) then
+					this = fr;
+					pcall(leave);
+					this = keep;
+				end
+				GameTooltip:Hide();
+			else
+				G.Print("  no tooltip script");
+			end
+		end
+	end
 end
 
 local function ListBindings(text)
@@ -637,7 +685,8 @@ function G.Slash(msg)
 	elseif ( cmd == "focus" ) then
 		FocusReport();
 	elseif ( cmd == "rows" ) then
-		RowsReport();
+		local _, _, tipWord = string.find(rest, "^tip%s*(.-)%s*$");
+		RowsReport(tipWord ~= nil, tipWord and string.lower(tipWord) or nil);
 	elseif ( cmd == "dmg" or cmd == "damage" ) then
 		if ( rest == "all" ) then
 			G.SetOpt("dmg", true);

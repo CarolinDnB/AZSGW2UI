@@ -93,7 +93,7 @@ Unlocked, every frame gets a gold box with its name and size: drag it to move it
     /gw2 hunt on | off                the search for the game's own popups (stops by itself when it finds none)
     /gw2 version                      the version of this UI
     /gw2 focus                        what is under the mouse: point at a thing with no tooltip, then type this
-    /gw2 rows                         where the game draws its own skill icons (after /gw2 off in a run)
+    /gw2 rows [tip [skill]]           where the game draws its own skill icons, and what its tooltips say
     /gw2 dmg all | crits | off        damage numbers: everything / critical hits only / none
     /gw2 dmg ticks on | ticks off     damage over time ticks in the numbers
     /gw2 char [on | off]              open the hero panel / use it instead of the game's character window

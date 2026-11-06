@@ -2117,6 +2117,31 @@ scenario("skills: a skill that is in no spellbook gets the game's tooltip by its
 	print("tooltips by spell id ok")
 end)
 
+scenario("/gw2 rows tip: the tooltips of the game's own skill icons", function()
+	local icon = G.abilityInfo.frostbolt and G.abilityInfo.frostbolt.icon
+	assert(icon, "no icon for frostbolt in the loadout")
+	local gameIcon = CreateFrame("Button", "FakeGameSkillIcon", UIParent)
+	local tex = gameIcon:CreateTexture(nil, "ARTWORK"); tex:SetTexture(icon)
+	local seenThis
+	gameIcon:SetScript("OnEnter", function() seenThis = this; GameTooltip:SetOwner(this, "ANCHOR_RIGHT"); GameTooltip:SetSpell(2, "spell"); GameTooltip:Show() end)
+	local left
+	gameIcon:SetScript("OnLeave", function() left = true; GameTooltip:Hide() end)
+	local before = #allWidgets
+	SlashCmdList["AZSGW2"]("rows")
+	SlashCmdList["AZSGW2"]("rows tip nothing")      -- only the skill asked for: no frame matches
+	assert(seenThis == nil, "a frame that was not asked for was pointed at")
+	SlashCmdList["AZSGW2"]("rows tip frost")
+	assert(seenThis == gameIcon, "the game's tooltip script was not run with its own frame as this")
+	assert(left and not GameTooltip.shown, "the tooltip was left up")
+	-- a game icon with a failing script does not stop the report
+	gameIcon:SetScript("OnEnter", function() error("boom") end)
+	SlashCmdList["AZSGW2"]("rows tip")
+	gameIcon:SetScript("OnEnter", nil)
+	SlashCmdList["AZSGW2"]("rows tip")
+	gameIcon:Hide()
+	print("rows tip ok")
+end)
+
 scenario("tooltips: a buff the game has no text for still has one", function()
 	runTicks(8, 0.1)
 	local a = G.buffs[1]
