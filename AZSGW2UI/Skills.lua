@@ -320,14 +320,24 @@ function G.SpellRemaining(entry, now)
 	return G.Num(entry.cd);
 end
 
--- the position of a spell in the spellbook, found by name (and rank when there is one): the game's own tooltip for
--- it (description, cost, range, cast time) can be shown with SetSpell. A spell of your pet (Kill Command is one of them
--- in some builds) is in the pet's own book. Returns the position and the book ("spell" or "pet"); nil when the spell is
--- in neither.
-local function BookIndex(name, rank)
-	if ( not ( name and GetSpellName ) ) then
-		return nil;
+-- Does a spellbook name stand for the name we have? Exactly, or (loose) when one is the other's first words: the game's key
+-- "rockbiter" is the spell "Rockbiter Weapon", "kill_command" is "Kill Command".
+local function SameName(book, name, loose)
+	if ( book == name ) then
+		return true;
 	end
+	if ( not loose or string.len(name) < 4 ) then
+		return false;
+	end
+	local a, b = string.lower(book), string.lower(name);
+	local la, lb = string.len(a), string.len(b);
+	if ( la > lb ) then
+		return string.sub(a, 1, lb + 1) == b .. " ";
+	end
+	return la >= 4 and string.sub(b, 1, la + 1) == a .. " ";
+end
+
+local function LookInBooks(name, rank, loose)
 	local last, exact = nil, nil;
 	local want = nil;
 	if ( rank and rank > 0 ) then
@@ -339,7 +349,7 @@ local function BookIndex(name, rank)
 			if ( offset and count ) then
 				for i = offset + 1, offset + count do
 					local n, r = GetSpellName(i, "spell");
-					if ( n == name ) then
+					if ( n and SameName(n, name, loose) ) then
 						last = i;
 						if ( want and r == want ) then
 							exact = i;
@@ -358,7 +368,7 @@ local function BookIndex(name, rank)
 		if ( not ok or not n ) then
 			break;
 		end
-		if ( n == name ) then
+		if ( SameName(n, name, loose) ) then
 			last = i;
 			if ( want and r == want ) then
 				exact = i;
@@ -369,6 +379,21 @@ local function BookIndex(name, rank)
 		return exact or last, "pet";
 	end
 	return nil;
+end
+
+-- the position of a spell in the spellbook, found by name (and rank when there is one): the game's own tooltip for
+-- it (description, cost, range, cast time) can be shown with SetSpell. A spell of your pet (Kill Command is one of them
+-- in some builds) is in the pet's own book. The name has to be the spell's own first, else it is tried as the first words of
+-- a spell's name. Returns the position and the book ("spell" or "pet"); nil when the spell is in neither.
+local function BookIndex(name, rank)
+	if ( not ( name and GetSpellName ) ) then
+		return nil;
+	end
+	local idx, book = LookInBooks(name, rank, false);
+	if ( idx ) then
+		return idx, book;
+	end
+	return LookInBooks(name, rank, true);
 end
 
 -- "arcane_missiles" -> "Arcane Missiles", for a spell the loadout has no name for
@@ -391,6 +416,37 @@ local function FindSpell(e)
 		idx, book = BookIndex(Pretty(e.key), rank);
 	end
 	return idx, book;
+end
+
+-- /gw2 focus on a skill: where its spell was found, or which spells of the books have a similar name
+function G.SkillBookReport(b)
+	local e = b and b.entry;
+	if ( not e ) then
+		return;
+	end
+	local info = G.abilityInfo[e.key];
+	local idx, book = FindSpell(e);
+	G.Print("skill " .. G.Plain(tostring(e.key)) .. ", the loadout calls it " .. G.Plain(tostring(info and info.name or "(no name)"))
+		.. ", rank " .. tostring(e.rank) .. ": " .. ( idx and ( "found, " .. book .. " book entry " .. idx ) or "not in your spellbook or your pet's" ));
+	if ( not idx and GetNumSpellTabs and GetSpellTabInfo and GetSpellName ) then
+		local word = string.lower(string.gsub(tostring(e.key), "_.*$", ""));
+		local shown = 0;
+		for tab = 1, GetNumSpellTabs() do
+			local _, _, offset, count = GetSpellTabInfo(tab);
+			if ( offset and count ) then
+				for i = offset + 1, offset + count do
+					local n, r = GetSpellName(i, "spell");
+					if ( n and shown < 6 and string.find(string.lower(n), word, 1, true) ) then
+						shown = shown + 1;
+						G.Print("  similar in the spellbook: " .. G.Plain(n) .. " " .. G.Plain(tostring(r or "")));
+					end
+				end
+			end
+		end
+		if ( shown == 0 ) then
+			G.Print("  nothing in the spellbook looks like '" .. G.Plain(word) .. "': the game has no tooltip text for it, ours is shown");
+		end
+	end
 end
 
 local function SpellTooltip(tt, b)

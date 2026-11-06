@@ -334,6 +334,7 @@ local function Help()
 	G.Print("/gw2 stats : every value of AZS_STATS (to check what the attributes show)");
 	G.Print("/gw2 hunt on|off : look for the game's own popup text on screen (stops itself when it finds none)");
 	G.Print("/gw2 debug : what is hidden, which bindings the buttons use");
+	G.Print("/gw2 version : the version of this UI");
 	G.Print("/gw2 focus : what is under the mouse (point at something that has no tooltip first); /gw2 rows : where the game draws its own skill icons");
 end
 
@@ -425,9 +426,21 @@ local function FocusReport()
 	else
 		G.Print("not one of ours: the game's own frame, or another addon's");
 	end
+	if ( f.entry and G.SkillBookReport ) then
+		G.SkillBookReport(f);
+	end
 	local t = G.tipLast;
 	if ( t ) then
 		G.Print("last tooltip of ours: " .. t.tag .. ", " .. t.lines .. " lines" .. ( t.floor and ", filled by the fallback" or "" ));
+	end
+	if ( GameTooltip and GameTooltip.IsShown ) then
+		local n = GameTooltip.NumLines and GameTooltip:NumLines() or 0;
+		G.Print("the game's tooltip is " .. ( GameTooltip:IsShown() and "up" or "not up" ) .. ", " .. n .. " lines:");
+		for i = 1, math.min(n, 8) do
+			local fs = getglobal("GameTooltipTextLeft" .. i);
+			local text = fs and fs.GetText and fs:GetText();
+			G.Print("  " .. ( ( text and text ~= "" ) and G.Plain(text) or "(empty line)" ));
+		end
 	end
 	if ( f.GetRegions ) then
 		local regs = { f:GetRegions() };
@@ -618,6 +631,9 @@ function G.Slash(msg)
 		G.Print(rest .. " is no longer kept hidden.");
 	elseif ( cmd == "find" and rest ~= "" ) then
 		FindFrames(rest);
+	elseif ( cmd == "version" or cmd == "ver" or cmd == "v" ) then
+		local v = GetAddOnMetadata and GetAddOnMetadata("AZSGW2UI", "Version");
+		G.Print("version " .. ( v and tostring(v) or "unknown" ));
 	elseif ( cmd == "focus" ) then
 		FocusReport();
 	elseif ( cmd == "rows" ) then

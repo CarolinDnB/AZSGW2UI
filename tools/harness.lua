@@ -566,6 +566,7 @@ function AZS_ProjectWorldAnchors(reqs)
 	return { entries = entries }
 end
 function PlaySound(n) table.insert(playedSounds, n) end
+function GetAddOnMetadata(addon, field) if addon == "AZSGW2UI" and field == "Version" then return "9.9.9-test" end end
 function GetPlayerBuff(i, filter)
 	local n = (filter == "HELPFUL") and 4 or 2
 	if i < n then return i + 10 end
@@ -2005,6 +2006,47 @@ scenario("skills: a ready skill that cannot be used does not flash", function()
 	AZS_SPELLS[4].cd = 0; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
 	assert(scanCalls - c0 <= 16, "skills read " .. ( scanCalls - c0 ) .. " times in 20 seconds of casting")
 	print("no flashing, no needless reads")
+end)
+
+scenario("skills: a skill is found in the spellbook by the first words of its spell's name", function()
+	table.insert(book, { "Rockbiter Weapon", "Rank 1" })       -- book entry 4
+	table.insert(book, { "Fireball", "Rank 1" })               -- book entry 5
+	spellTipText[4] = { "Rockbiter Weapon", "Imbue your weapon with the power of earth." }
+	local keep = AZS_SPELLS[5]
+	local b = G.slots[5]
+	AZS_SPELLS[5] = { key = "rockbiter", spell = 8017, rank = 1, cd = 0, cdmax = 0 }
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(10, 0.05)
+	b.scripts.OnEnter()
+	assert(lastSetSpell and lastSetSpell[1] == 4 and lastSetSpell[2] == "spell", "Rockbiter Weapon was not found for 'rockbiter': " .. tostring(lastSetSpell and lastSetSpell[1]))
+	assert(GameTooltip.shown, "no tooltip")
+	b.scripts.OnLeave()
+	-- a short name is not the start of every longer one
+	AZS_SPELLS[5] = { key = "fire", spell = 1, rank = 1, cd = 0, cdmax = 3 }
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(10, 0.05)
+	b.scripts.OnEnter()
+	assert(lastSetSpell == nil and #tipLines >= 2, "'fire' was taken for Fireball: " .. table.concat(tipLines, " | "))
+	b.scripts.OnLeave()
+	-- /gw2 focus on a skill says where its spell was found, or what looks like it
+	local mf = GetMouseFocus
+	AZS_SPELLS[5] = { key = "rockbiter", spell = 8017, rank = 1, cd = 0, cdmax = 0 }
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(10, 0.05)
+	GetMouseFocus = function() return b end
+	SlashCmdList["AZSGW2"]("focus")
+	AZS_SPELLS[5] = { key = "rockbiter_x", spell = 8017, rank = 1, cd = 0, cdmax = 0 }
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(10, 0.05)
+	SlashCmdList["AZSGW2"]("focus")
+	GetMouseFocus = mf
+	table.remove(book); table.remove(book)
+	spellTipText[4] = nil
+	SlashCmdList["AZSGW2"]("version")
+	AZS_SPELLS[5] = keep
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(10, 0.05)
+	print("skills are found by the first words of a spell's name")
 end)
 
 scenario("tooltips: a buff the game has no text for still has one", function()
