@@ -171,7 +171,7 @@ This is a fan made interface for Azeroth Survivors. It is not affiliated with or
 "Guild Wars" is a trademark of ArenaNet / NCSOFT. The layout is inspired by Guild Wars 2's interface; all textures, icons and
 code here are original.
 
-## Changes in 1.8.1
+## Changes in 1.9.0
 
 - The minimap icon only opens the settings window (right click removed: it left you in the unlocked layout).
 - Talent procs above the left skills are gone (they showed empty icons).

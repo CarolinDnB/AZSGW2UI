@@ -1,5 +1,5 @@
 -- AZS GW2 UI: Plates.lua
--- Nameplates in the look of this UI (1.8.1): a thin red bar with the health number in it, orange for elites and
+-- Nameplates in the look of this UI (1.9.0): a thin red bar with the health number in it, orange for elites and
 -- guardians, a crown for elites and a white outline on your target, like Guild Wars 2. Own art.
 --
 -- The game keeps doing the work: it decides which enemies and friends get a plate, where it stands and how

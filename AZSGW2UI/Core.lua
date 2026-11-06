@@ -493,7 +493,7 @@ function G.NewBar(parent, w, h, r, g, b)
 	return f;
 end
 
--- The health bar of the target bar and the nameplates (1.8.1): a black outline, a dark red track (the part of the
+-- The health bar of the target bar and the nameplates (1.9.0): a black outline, a dark red track (the part of the
 -- bar that is gone), and a lit fill that is tinted in game. The fill is cropped, not squeezed, as it shortens.
 function G.NewGwBar(parent, w, h)
 	local f = CreateFrame("Frame", nil, parent);
@@ -905,7 +905,7 @@ end
 
 -- The game's own nameplates are switched once to what the options say: when this UI starts, when a world loads (the
 -- game forgets them then) and when an option changes. They are not fought afterwards, so a player who presses the
--- game's own key for them gets them (before 1.8.1 they were switched off again within a second).
+-- game's own key for them gets them (before 1.9.0 they were switched off again within a second).
 -- G.platesApplied / G.friendApplied: nil = not looked at yet, true = switched on by us, false = switched off by us.
 function G.EnforcePlates()
 	local want = G.Opt("nameplates") and true or false;

@@ -35,7 +35,7 @@ function G.CleanDB(d)
 	if ( type(d.opt) ~= "table" ) then
 		d.opt = {};
 	end
-	-- before 1.8.1 "plates" meant the game's own enemy nameplates: now they are the GW2 nameplates
+	-- before 1.9.0 "plates" meant the game's own enemy nameplates: now they are the GW2 nameplates
 	if ( d.plates and d.opt.nameplates == nil ) then
 		d.opt.nameplates = true;
 	end

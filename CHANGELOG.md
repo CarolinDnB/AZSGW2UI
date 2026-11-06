@@ -1,6 +1,6 @@
 # AZS GW2 UI: Changelog
 
-## 1.8.1
+## 1.9.0
 
 **New**
 - **Nameplates in the Guild Wars 2 style.** A small glossy red bar (no name: that is on the target bar), the health inside for your target, a white outline on the target's plate, a crown (elite) or skull (boss) mark. Settings: *Enable nameplates*, *only elites and guardians*, *Enable friendly nameplates* (also `/gw2 plates ...`). They are off by default. The game's own V key for nameplates now works as usual: it used to be undone after about half a second.
@@ -24,7 +24,7 @@
 - **The 10 second DPS stopped after about 20 seconds on pet builds** and only came back after a reset. It now asks the game's meter API for the recent rate (pets, summons and totems included) and, if the game cannot answer, works it out itself without starting over when a line drops out of the list.
 
 **Notes**
-- Tested in the simulated client only. The nameplate skin depends on the game's plate frames looking like those of the standard 1.12 client. If they do not, nothing is hidden and the game's plates show as before; `/gw2 plates debug` prints what the addon finds.
+- The nameplate skin depends on the game's plate frames looking like those of the standard 1.12 client. If they do not, nothing is hidden and the game's plates show as before; `/gw2 plates debug` prints what the addon finds.
 
 ## 1.8.0
 
