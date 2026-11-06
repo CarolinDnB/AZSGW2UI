@@ -418,6 +418,55 @@ local function FindSpell(e)
 	return idx, book;
 end
 
+-- A skill whose spell is in no spellbook (the hero never learns Rockbiter Weapon: the game casts it): the game can still
+-- show the tooltip of a spell from its id, the way a link in the chat does. Which kind of link this client takes is found
+-- out once per spell; a spell no link gives a tooltip for is not asked again for half a minute.
+local LINKS = { "spell", "enchant" };
+G.linkKind = {};          -- spell id -> the kind of link that gave a tooltip
+G.linkMiss = {};          -- spell id -> when no link did
+
+-- does the first line of a tooltip belong to the skill? (its first word is in it)
+local function LinkFits(text, name)
+	if ( not name or name == "" ) then
+		return true;
+	end
+	local first = string.gsub(string.lower(name), "%s.*$", "");
+	return string.find(string.lower(text), first, 1, true) ~= nil;
+end
+
+local function SetByLink(tt, e, name)
+	local id = math.floor(G.Num(e.spell));
+	if ( id <= 0 or not tt.SetHyperlink or not tt.NumLines ) then
+		return false;
+	end
+	local now = GetTime();
+	local miss = G.linkMiss[id];
+	if ( miss and now - miss < 30 ) then
+		return false;
+	end
+	local tn = ( tt.GetName and tt:GetName() ) or "GameTooltip";
+	local kinds = LINKS;
+	if ( G.linkKind[id] ) then
+		kinds = { G.linkKind[id] };
+	end
+	for i = 1, table.getn(kinds) do
+		local ok = pcall(tt.SetHyperlink, tt, kinds[i] .. ":" .. id);
+		if ( ok and ( tt:NumLines() or 0 ) > 0 ) then
+			local fs = getglobal(tn .. "TextLeft1");
+			local text = fs and fs.GetText and fs:GetText();
+			if ( text and text ~= "" and LinkFits(text, name) ) then
+				G.linkKind[id], G.linkMiss[id] = kinds[i], nil;
+				return true;
+			end
+		end
+		if ( tt.ClearLines ) then
+			tt:ClearLines();
+		end
+	end
+	G.linkKind[id], G.linkMiss[id] = nil, now;
+	return false;
+end
+
 -- /gw2 focus on a skill: where its spell was found, or which spells of the books have a similar name
 function G.SkillBookReport(b)
 	local e = b and b.entry;
@@ -428,6 +477,9 @@ function G.SkillBookReport(b)
 	local idx, book = FindSpell(e);
 	G.Print("skill " .. G.Plain(tostring(e.key)) .. ", the loadout calls it " .. G.Plain(tostring(info and info.name or "(no name)"))
 		.. ", rank " .. tostring(e.rank) .. ": " .. ( idx and ( "found, " .. book .. " book entry " .. idx ) or "not in your spellbook or your pet's" ));
+	local sid = math.floor(G.Num(e.spell));
+	G.Print("  spell id " .. sid .. ", tooltip by id: " .. ( G.linkKind[sid] and ( "works (" .. G.linkKind[sid] .. " link)" )
+		or ( G.linkMiss[sid] and "no kind of link gave one" or "not tried yet" )));
 	if ( not idx and GetNumSpellTabs and GetSpellTabInfo and GetSpellName ) then
 		local word = string.lower(string.gsub(tostring(e.key), "_.*$", ""));
 		local shown = 0;
@@ -483,6 +535,14 @@ local function SpellTooltip(tt, b)
 		if ( tt.ClearLines ) then
 			tt:ClearLines();         -- the game had nothing to say about it: the lines below are the tooltip
 		end
+	end
+	-- not in a book: the game's tooltip of the spell by its id
+	if ( SetByLink(tt, e, ( info and info.name ) or Pretty(e.key)) ) then
+		if ( rem > 0.05 ) then
+			tt:AddLine(string.format("Ready in %.1f sec", rem), 1, 0.4, 0.4);
+		end
+		tt:AddLine("Casts automatically", 0.6, 0.6, 0.6);
+		return;
 	end
 	tt:AddLine((info and info.name) or Pretty(e.key), G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
 	if ( G.Num(e.rank) > 0 ) then
@@ -1066,6 +1126,25 @@ local function ScanSpell(b, idx, book)
 	return lines;
 end
 
+-- the same for a skill that is in no book: its tooltip by the spell's id
+local function ScanLink(b, e)
+	local tt, prefix = FreeTip();
+	if ( not tt ) then
+		return nil;
+	end
+	local info = G.abilityInfo[e.key];
+	pcall(tt.SetOwner, tt, b, "ANCHOR_NONE");
+	local lines = {};
+	if ( SetByLink(tt, e, ( info and info.name ) or Pretty(e.key)) ) then
+		if ( tt.Show ) then
+			tt:Show();
+		end
+		lines = CollectLines(tt, prefix);
+	end
+	tt:Hide();
+	return lines;
+end
+
 -- reads the tooltip of the skill in slot b; false when no tooltip was free (it is tried again at the next look).
 -- dump: a table that gets the lines read, for /gw2 targets
 local function ReadTargets(b, dump)
@@ -1089,8 +1168,13 @@ local function ReadTargets(b, dump)
 	end
 	local n = 0;
 	b.scanLine = nil;
-	if ( b.bookIdx ) then
-		local lines = ScanSpell(b, b.bookIdx, b.bookBook);
+	if ( b.bookIdx or math.floor(G.Num(e.spell)) > 0 ) then
+		local lines;
+		if ( b.bookIdx ) then
+			lines = ScanSpell(b, b.bookIdx, b.bookBook);
+		else
+			lines = ScanLink(b, e);
+		end
 		if ( not lines ) then
 			return false;
 		end
@@ -1300,8 +1384,10 @@ function G.TargetsReport()
 					what = "number read: " .. tostring(sl.scanN);
 				elseif ( sl.bookIdx ) then
 					what = "no number in the text";
+				elseif ( G.linkKind[math.floor(G.Num(sl.entry.spell))] ) then
+					what = "no number in the text (read by spell id)";
 				else
-					what = "not found in the spellbook";
+					what = "not found in the spellbook, and no tooltip by spell id";
 				end
 			end
 			G.Print(i .. ": " .. G.Plain(tostring(( info and info.name ) or sl.entry.key)) .. ", rank " .. tostring(sl.entry.rank) .. ", book entry "

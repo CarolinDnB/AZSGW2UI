@@ -229,7 +229,7 @@ impl.SetOwner = function(self, f, a)
 	self.anchor = a
 	self.owner = f
 	if self._name == "AZSGW2ScanTip" then return end
-	tipLines = {}; lastSetSpell = nil
+	tipLines = {}; lastSetSpell = nil; lastLink = nil
 end
 impl.SetSpell = function(self, idx, book)
 	assert(type(idx) == "number" and (book == "spell" or book == "pet"), "SetSpell args")
@@ -248,6 +248,23 @@ impl.SetSpell = function(self, idx, book)
 	end
 	if nm == "AZSGW2ScanTip" then return end
 	lastSetSpell = { idx, book }; tipLines = { "(game tooltip)" }
+end
+linkTip = {}           -- "spell:ID" / "enchant:ID" -> the lines of the tooltip a link gives ("error": the call fails)
+lastLink = nil
+impl.SetHyperlink = function(self, link)
+	assert(type(link) == "string", "SetHyperlink arg")
+	local nm = self._name
+	local lines = linkTip[link]
+	if lines == "error" then error("Unknown link type") end
+	if not lines then self.tipText = nil; return end
+	self.tipText = lines
+	self.shown = true
+	for i, t in ipairs(lines) do
+		local fs = _G[nm .. "TextLeft" .. i] or new("FontString", self, nm .. "TextLeft" .. i)
+		fs.fontSet = true; fs.text = t
+	end
+	if nm == "AZSGW2ScanTip" then return end
+	lastLink = link; tipLines = { "(game tooltip)" }
 end
 impl.NumLines = function(self) return self.tipText and #self.tipText or 0 end
 impl.GetOwner = function(self) return self.owner end
@@ -2047,6 +2064,57 @@ scenario("skills: a skill is found in the spellbook by the first words of its sp
 	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
 	runTicks(10, 0.05)
 	print("skills are found by the first words of a spell's name")
+end)
+
+scenario("skills: a skill that is in no spellbook gets the game's tooltip by its spell id", function()
+	local keep = AZS_SPELLS[5]
+	local b = G.slots[5]
+	AZS_SPELLS[5] = { key = "rockbiter", spell = 8017, rank = 1, cd = 0, cdmax = 1.6 }
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(10, 0.05)
+	-- no link gives a tooltip: our own lines
+	b.scripts.OnEnter()
+	assert(lastSetSpell == nil and tipLines[1] == "Rockbiter" and #tipLines >= 3, "own lines: " .. table.concat(tipLines, " | "))
+	b.scripts.OnLeave()
+	-- the client takes the enchant kind of link, not the spell kind
+	linkTip["enchant:8017"] = { "Rockbiter Weapon", "Imbue your weapon with the power of earth." }
+	G.linkMiss = {}
+	b.scripts.OnEnter()
+	assert(lastLink == "enchant:8017" and GameTooltip.shown and tipLines[#tipLines] == "Casts automatically", "no tooltip by id: " .. table.concat(tipLines, " | "))
+	assert(G.linkKind[8017] == "enchant", "the kind that worked is not remembered")
+	b.scripts.OnLeave()
+	-- the tooltip of another spell is not taken for this one
+	linkTip["enchant:8017"] = { "Something Else", "x" }
+	G.linkKind, G.linkMiss = {}, {}
+	b.scripts.OnEnter()
+	assert(tipLines[1] == "Rockbiter", "a tooltip of another spell was used: " .. table.concat(tipLines, " | "))
+	b.scripts.OnLeave()
+	-- a call that fails does not break the hover
+	linkTip["enchant:8017"] = "error"
+	G.linkKind, G.linkMiss = {}, {}
+	b.scripts.OnEnter()
+	assert(GameTooltip.shown and #tipLines >= 3, "the hover broke on a failing link")
+	b.scripts.OnLeave()
+	-- the number of targets is read from it
+	linkTip["enchant:8017"] = nil
+	linkTip["spell:8017"] = { "Rockbiter Weapon", "Strikes up to 3 enemies." }
+	G.linkKind, G.linkMiss = {}, {}
+	b.tgtKey = nil
+	runTicks(30, 0.1)
+	assert(b.hitChip.shown and b.hitText.text == "3", "targets by spell id: " .. tostring(b.hitText.text))
+	assert(not GameTooltip.shown, "the reading left the tooltip up")
+	-- /gw2 focus and /gw2 targets say what happened
+	local mf = GetMouseFocus
+	GetMouseFocus = function() return b end
+	SlashCmdList["AZSGW2"]("focus")
+	GetMouseFocus = mf
+	SlashCmdList["AZSGW2"]("targets")
+	linkTip = {}
+	G.linkKind, G.linkMiss = {}, {}
+	AZS_SPELLS[5] = keep
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(20, 0.1)
+	print("tooltips by spell id ok")
 end)
 
 scenario("tooltips: a buff the game has no text for still has one", function()
