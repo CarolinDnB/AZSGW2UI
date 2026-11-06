@@ -1,5 +1,26 @@
 # AZS GW2 UI: Changelog
 
+## 1.8.1
+
+**New**
+- **Nameplates in the Guild Wars 2 style.** A small glossy red bar with the name under it, the health inside for your target, a white outline on the target's plate, a crown (elite) or skull (boss) mark. Settings: *Enable nameplates*, *only elites and guardians*, *Enable friendly nameplates* (also `/gw2 plates ...`). They are off by default. The game's own V key for nameplates now works as usual: it used to be undone after about half a second.
+- **New target bar** in the style of Guild Wars 2: a wide flat bar, glossy fill, dark frame, name left and health with percent right, a round badge at the right end (crown for elites, small skull otherwise). Gold for elites, green for friends.
+- **Enemies hit:** a small round number on top of a skill says how many enemies the last cast hit, so you can see plus targets without hovering. It only shows from 2 on and fades after a few seconds. *Enemies hit, on the skills* turns it off.
+- **Resize every part on its own** in the unlocked layout: drag the corner of a gold box or use the mouse wheel; right click puts the size back. The box shows its size. A bar at the top of the screen locks the layout again. "Size" in the settings still changes everything at once.
+
+**Changed**
+- Parts that belong together (the orb and the skill bar around it, for example) resize together so they keep fitting.
+
+**Removed**
+- The right click on the minimap icon. It left you in the unlocked layout with no clear way out. Left click opens the settings, "Unlock layout" is in there.
+- The talent proc / "recharging" icons above the left skills: they showed empty icons (and nothing for Hot Streak).
+
+**Fixed**
+- **The 10 second DPS stopped after about 20 seconds on pet builds** and only came back after a reset. It now asks the game's meter API for the recent rate (pets, summons and totems included) and, if the game cannot answer, works it out itself without starting over when a line drops out of the list.
+
+**Notes**
+- Tested in the simulated client only. The nameplate skin depends on the game's plate frames looking like those of the standard 1.12 client. If they do not, nothing is hidden and the game's plates show as before; `/gw2 plates debug` prints what the addon finds.
+
 ## 1.8.0
 
 **New**

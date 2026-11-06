@@ -2,7 +2,7 @@
 -- Six display-only skill slots (the spells cast themselves in Azeroth Survivors): three on each side of
 -- the orb, big and tight, each with a round rank chip. The racial sits left of the left three; Talents and
 -- Character are two small buttons stacked right of the right three. A jewelry plate and the status
--- row (summons, totems, talent clocks) sit around them. Own art; the layout is inspired by GW2_UI.
+-- row (summons, totems) sit around them. Own art; the layout is inspired by GW2_UI.
 
 local G = AZSGW2;
 
@@ -16,7 +16,7 @@ local OUTER = 8;          -- gap before the racial / the small buttons
 local WINGH = SLOT + 24;  -- height of the smoke behind each side
 local AURAS = 10;      -- buffs / debuffs shown, one row each
 local AURASIZE = 26;
-local STATUS = 12;     -- summons, totems and talent clocks: two rows of six
+local STATUS = 12;     -- summons and totems: two rows of six
 local STATUSSIZE = 24;
 local STATUSROW = 6;   -- 6 x 24 + 5 x 2 = 154 px: as wide as the left three slots, so it never reaches the orb
 
@@ -149,6 +149,29 @@ local function NewSlot(size, hasCooldown, ranked)
 	b.keyText = G.Text(chip, 10, "CENTER");
 	b.keyText:SetPoint("CENTER", chip, "CENTER", 0, 0);
 	b.keyText:SetTextColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+
+	-- how many enemies the skill hit with its last cast: the same chip as the rank, at the top centre, in red
+	if ( hasCooldown ) then
+		local hc = CreateFrame("Frame", nil, tf);
+		hc:SetWidth(18);
+		hc:SetHeight(18);
+		hc:SetPoint("CENTER", b, "TOP", 0, -1);
+		hc:SetFrameLevel(b:GetFrameLevel() + 6);
+		local hring = hc:CreateTexture(nil, "BACKGROUND");
+		hring:SetTexture(G.MASK);
+		hring:SetVertexColor(0.74, 0.30, 0.25, 1);
+		hring:SetAllPoints(hc);
+		local hdisc = hc:CreateTexture(nil, "BORDER");
+		hdisc:SetTexture(G.MASK);
+		hdisc:SetVertexColor(0.07, 0.02, 0.02, 1);
+		hdisc:SetPoint("TOPLEFT", hc, "TOPLEFT", 2, -2);
+		hdisc:SetPoint("BOTTOMRIGHT", hc, "BOTTOMRIGHT", -2, 2);
+		hc:Hide();
+		b.hitChip = hc;
+		b.hitText = G.Text(hc, 10, "CENTER");
+		b.hitText:SetPoint("CENTER", hc, "CENTER", 0, 0);
+		b.hitText:SetTextColor(1, 0.90, 0.84);
+	end
 	return b;
 end
 
@@ -166,6 +189,19 @@ local function SetRank(b, rank)
 	else
 		b.keyText:SetText("");
 		b.chip:Hide();
+	end
+end
+
+local function SetHits(b, n)
+	if ( not b.hitChip or b.curHits == n ) then
+		return;
+	end
+	b.curHits = n;
+	if ( n and n > 0 ) then
+		b.hitText:SetText(tostring(n));
+		b.hitChip:Show();
+	else
+		b.hitChip:Hide();
 	end
 end
 
@@ -210,6 +246,7 @@ local function SetEmpty(b)
 	end
 	SetCdText(b, "");
 	SetRank(b, 0);
+	SetHits(b, 0);
 end
 
 local function SetSpell(b, entry)
@@ -542,7 +579,7 @@ function G.BuildSkills()
 	BuildAuraRow(G.buffs, "BOTTOMLEFT", G.slots[4], "TOPLEFT", 6, 12);
 	BuildAuraRow(G.debuffs, "BOTTOMLEFT", G.buffs[1], "TOPLEFT", 0, 6);
 
-	-- status rows above the left three skills: summons, totems and talent clocks (two rows of six)
+	-- status rows above the left three skills: summons and totems (two rows of six)
 	G.status = {};
 	for i = 1, STATUS do
 		local s = CreateFrame("Frame", nil, UIParent);
@@ -637,6 +674,132 @@ function G.UpdateSkills(dt)
 	end
 end
 
+------------------------------------------------------------------------ enemies hit by a skill
+
+-- The game does not say how many enemies a skill hits (the +targets of a hero add to it), but it lists every hit
+-- with its target. So this counts the different enemies one cast hit: hits of the same skill that land within
+-- a third of a second of each other are one cast. The chip shows the biggest number of the last cast and falls to
+-- the real one when the cast is over; it goes away four seconds after the last hit. One enemy shows nothing: the
+-- chip is for the skills that hit more than one.
+local BURST = 0.35;
+local HITHOLD = 4;
+local HITPAGES = 4;
+G.hits = {};
+G.hitCursor = nil;
+
+local function CloseBurst(h)
+	h.open = false;
+	h.shown = h.n;
+end
+
+local function NoteHit(e, now)
+	local key = e.meterSourceKey;
+	if ( type(key) ~= "string" or not e.targetId ) then
+		return;
+	end
+	local _, _, ability = string.find(key, "^ability:([^:]+)");
+	if ( not ability ) then
+		return;
+	end
+	local t = e.presentedAt or now;
+	if ( now - t > 2 ) then
+		return;                                         -- an old hit of a delayed batch
+	end
+	local h = G.hits[ability];
+	if ( not h ) then
+		h = { n = 0, shown = 0, last = 0, set = {} };
+		G.hits[ability] = h;
+	end
+	if ( h.open and t - h.last > BURST ) then
+		CloseBurst(h);
+	end
+	if ( not h.open ) then
+		h.open = true;
+		h.n = 0;
+		for k in pairs(h.set) do
+			h.set[k] = nil;
+		end
+	end
+	if ( not h.set[e.targetId] ) then
+		h.set[e.targetId] = true;
+		h.n = h.n + 1;
+	end
+	if ( h.n > h.shown ) then
+		h.shown = h.n;
+	end
+	if ( t > h.last ) then
+		h.last = t;
+	end
+end
+
+local function ReadHits(now)
+	for page = 1, HITPAGES do
+		local batch, err = AZS_GetCombatTextEvents(G.hitCursor);
+		if ( not batch ) then
+			G.hitCursor = nil;                          -- a new stream (a new run, a /reload): start again
+			return;
+		end
+		G.hitCursor = batch.cursor;
+		local events = batch.events or {};
+		for i = 1, table.getn(events) do
+			local e = events[i];
+			if ( e.kind == "damage" and e.sourceKind == "player" ) then
+				NoteHit(e, now);
+			end
+		end
+		if ( not batch.hasMore ) then
+			return;
+		end
+	end
+end
+
+function G.ClearHits()
+	for key, h in pairs(G.hits) do
+		G.hits[key] = nil;
+	end
+	G.hitCursor = nil;
+	for i = 1, 6 do
+		if ( G.slots[i] ) then
+			SetHits(G.slots[i], 0);
+		end
+	end
+	SetHits(G.racial, 0);
+end
+
+function G.UpdateHits(dt)
+	if ( not G.slots[1] ) then
+		return;
+	end
+	if ( not G.shown or not G.Opt("hits") or not AZS_GetCombatTextEvents ) then
+		if ( G.hitCursor or next(G.hits) ) then
+			G.ClearHits();
+		end
+		return;
+	end
+	local now = GetTime();
+	ReadHits(now);
+	for i = 1, 7 do
+		local b = G.slots[i];
+		if ( i == 7 ) then
+			b = G.racial;
+		end
+		local n = 0;
+		local key = b and b.entry and b.entry.key;
+		local h = key and G.hits[key];
+		if ( h ) then
+			if ( h.open and now - h.last > BURST ) then
+				CloseBurst(h);
+			end
+			if ( now - h.last <= HITHOLD and h.shown >= 2 ) then
+				n = h.shown;
+			end
+		end
+		if ( b ) then
+			SetHits(b, n);
+		end
+	end
+end
+
 function G.UpdateJewelry(dt)
 	if ( not G.jewSlots ) then
 		return;
@@ -698,17 +861,6 @@ function G.UpdateStatus(dt)
 			end
 		end
 	end
-	if ( AZS_GetTimers ) then
-		local timers = AZS_GetTimers();
-		if ( timers ) then
-			for i = 1, table.getn(timers) do
-				local t = timers[i];
-				if ( G.Num(t.remaining) > 0 ) then
-					add({ icon = t.icon, remaining = t.remaining, name = t.name, note = "Recharging", dim = true });
-				end
-			end
-		end
-	end
 
 	for i = 1, STATUS do
 		local s = G.status[i];
@@ -717,11 +869,7 @@ function G.UpdateStatus(dt)
 			s.data = e;
 			s.icon:SetTexture(e.icon or G.QUESTION);
 			s.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93);
-			if ( e.dim ) then
-				s.icon:SetVertexColor(0.6, 0.6, 0.65, 1);
-			else
-				s.icon:SetVertexColor(1, 1, 1, 1);
-			end
+			s.icon:SetVertexColor(1, 1, 1, 1);
 			if ( e.count and e.count > 1 ) then
 				s.count:SetText(tostring(e.count));
 			else

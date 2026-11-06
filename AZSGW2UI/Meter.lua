@@ -136,14 +136,23 @@ end
 -- Reset: the game's counters cannot be cleared (the API only reads them), so a reset remembers what every line
 -- had at that moment and shows the difference from then on, on all four tabs. A new run, or a counter that
 -- went down (a new boss fight), ends the remembered state and the game's numbers show again.
--- The rate is the damage (healing) of the last 10 seconds: every tab's total is noted twice a second (once a
--- second for the tabs not on screen) and the rate is the change over the last 10 seconds. It costs no extra
--- API call and counts from the reset after one.
+-- The rate is the damage (healing) of the last 10 seconds. The game's meter API counts it (with the hero's pets,
+-- summons and totems, which is where the numbers of a pet class come from), once a second for the tab on screen,
+-- and from the reset on: a reset takes a checkpoint of the API too. When the API cannot say (an older game, an
+-- error) the addon works it out itself: every tab's total is noted (twice a second on screen, once a second
+-- otherwise) and the rate is what was added over the last 10 seconds. A total that goes down (a source left the
+-- list, a new fight) takes nothing back and does not start the history over.
 
 local WINDOW = 10;
+local RATEGAP = 1;               -- seconds between two asks of the API for the rate
+local RATEFRESH = 3;             -- an answer older than this is not shown
 local base = {};                 -- base[mode] = { map = { name = amount }, total = amount, run = runId }
-local rings = {};                -- rings[mode] = { t = { time, ... }, v = { total, ... } }
+local rings = {};                -- rings[mode] = { t = { time, ... }, v = { added so far, ... }, last = total, cum = added so far }
+local skipNote = {};             -- skipNote[mode]: the next note is a new start (the baseline went), not damage
+local apiRate = {};              -- apiRate[mode] = { asked = time, value = rate, at = time }
 G.meterResetAt = nil;
+G.meterCheckpoint = nil;         -- the API checkpoint of the last reset
+G.meterCheckpointWanted = false;
 
 local function RunId()
 	if ( AZS_GetMeterContext ) then
@@ -157,7 +166,12 @@ end
 
 function G.ResetMeter()
 	local run = RunId();
-	base, rings = {}, {};
+	base, rings, skipNote, apiRate = {}, {}, {}, {};
+	if ( G.meterCheckpoint and AZS_ReleaseMeterCheckpoint ) then
+		pcall(AZS_ReleaseMeterCheckpoint, G.meterCheckpoint);
+	end
+	G.meterCheckpoint = nil;
+	G.meterCheckpointWanted = true;                      -- taken with the next rate read
 	for i = 1, table.getn(TABS) do
 		local mode = TABS[i].key;
 		local lines, total = GetData(mode);
@@ -198,6 +212,7 @@ local function Rebase(mode, lines, total)
 	end
 	if ( over ) then
 		base[mode] = nil;
+		skipNote[mode] = true;                             -- the total jumps back to the game's own: not damage
 		return lines, total;
 	end
 	local out, sum = {}, 0;
@@ -215,21 +230,29 @@ local function Rebase(mode, lines, total)
 	for i = 1, table.getn(out) do
 		out[i].share = out[i].dmg / sum;
 	end
-	return out, sum;
+	-- the game's total minus the total at the reset also counts sources the list does not show
+	return out, math.max(sum, G.Num(total) - b.total);
 end
 
--- notes the total of a tab; a total that went down (new fight, new run, reset) starts the tab's history over
+-- notes the total of a tab. The history keeps what was ADDED: a total that went down (a source left the list, a new
+-- fight, a pet that is gone) is not damage taken back, and the rate goes on from the new level
 local function Note(mode, now, total)
 	local r = rings[mode];
 	if ( not r ) then
-		r = { t = {}, v = {} };
+		r = { t = {}, v = {}, last = total, cum = 0 };
 		rings[mode] = r;
 	end
-	local n = table.getn(r.t);
-	if ( n > 0 and total < r.v[n] - 0.5 ) then
-		r.t, r.v, n = {}, {}, 0;
+	local d = total - r.last;
+	r.last = total;
+	if ( skipNote[mode] ) then
+		skipNote[mode] = nil;
+		d = 0;
 	end
-	r.t[n + 1], r.v[n + 1] = now, total;
+	if ( d > 0 ) then
+		r.cum = r.cum + d;
+	end
+	local n = table.getn(r.t);
+	r.t[n + 1], r.v[n + 1] = now, r.cum;
 	-- one note older than the window is kept, the rest goes
 	while ( table.getn(r.t) > 2 and r.t[2] <= now - WINDOW ) do
 		table.remove(r.t, 1);
@@ -249,6 +272,57 @@ local function RateOf(mode, now)
 		return 0;
 	end
 	return math.max(0, ( r.v[n] - r.v[1] ) / span);
+end
+
+-- the rate of the last 10 seconds as the game's meter API counts it (the hero with pets, summons and totems), nil when
+-- it cannot say; asked once a second at most
+local function ApiRateOf(mode, now)
+	if ( not AZS_GetMeterContext or not AZS_GetMeterSnapshot ) then
+		return nil;
+	end
+	local a = apiRate[mode];
+	if ( not a ) then
+		a = { asked = -100 };
+		apiRate[mode] = a;
+	end
+	if ( now - a.asked >= RATEGAP ) then
+		a.asked = now;
+		local ctx = AZS_GetMeterContext();
+		if ( type(ctx) == "table" and type(ctx.runId) == "string" ) then
+			if ( G.meterCheckpointWanted and not G.meterCheckpoint and AZS_CreateMeterCheckpoint ) then
+				local cp = AZS_CreateMeterCheckpoint(ctx.runId);
+				if ( type(cp) == "table" and type(cp.checkpointId) == "string" ) then
+					G.meterCheckpoint = cp.checkpointId;
+					G.meterCheckpointWanted = false;
+				end
+			end
+			local q = { apiVersion = 1, runId = ctx.runId, metric = "damage", scope = "self", period = "run",
+				groupBy = "owner", windowSeconds = WINDOW };
+			if ( mode == "healing" ) then
+				q.metric = "healing";
+			elseif ( mode == "boss" ) then
+				q.period = "encounter";
+			elseif ( mode == "party" ) then
+				q.scope = "party";
+			end
+			if ( G.meterCheckpoint ) then
+				q.checkpointId = G.meterCheckpoint;
+			end
+			local snap, err = AZS_GetMeterSnapshot(q);
+			if ( snap and type(snap.totals) == "table" and type(snap.totals.displayRate) == "table" ) then
+				local rate = snap.totals.displayRate;
+				if ( rate.status == "ready" and type(rate.value) == "number" and rate.value == rate.value and rate.value >= 0 ) then
+					a.value, a.at = rate.value, now;
+				end
+			elseif ( err and type(err.code) == "string" and string.find(err.code, "^CHECKPOINT" ) ) then
+				G.meterCheckpoint = nil;                     -- gone (a new run, a /reload): the next ask goes without it
+			end
+		end
+	end
+	if ( a.value and now - a.at <= RATEFRESH ) then
+		return a.value;
+	end
+	return nil;
 end
 
 local function SetMode(mode)
@@ -410,7 +484,7 @@ function G.UpdateMeter(dt)
 			end
 		end
 	end
-	rate = RateOf(mode, now);
+	rate = ApiRateOf(mode, now) or RateOf(mode, now);
 	f.summary:SetText(string.format("Total: %s   %s: %s", G.Short(total), unit, G.Short(rate)));
 
 	local maxShare = 0;

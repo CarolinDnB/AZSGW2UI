@@ -730,25 +730,81 @@ end
 
 ------------------------------------------------------------------------ target bar (normal and elite enemies)
 
--- the API gives health for special enemies and for your target only, so this one compact bar
--- stands in for the enemy nameplates (red for enemies, gold for elites, green for friends).
--- Bosses and guardians have their own bars above.
+-- A wide, flat bar in the style of Guild Wars 2: the name on the left inside the bar, the health and the percent on
+-- the right, a round badge on the right end (a skull for an enemy, a crown for an elite, none for a friend). Red for
+-- enemies, gold for elites, green for friends. Bosses and guardians have their own bars above.
+local TARGETW = 320;
+local TARGETH = 22;
+
 function G.BuildTarget()
 	local f = CreateFrame("Frame", "AZSGW2Target", UIParent);
-	f:SetWidth(240);
-	f:SetHeight(30);
+	f:SetWidth(TARGETW);
+	f:SetHeight(TARGETH);
 	f:SetPoint("TOP", UIParent, "TOP", 0, -96);
 	G.Movable(f, "target", "Target bar", nil, nil, false);
 	f:SetFrameStrata("MEDIUM");
 	G.Register(f, true);
 	f:Hide();
 	G.target = f;
-	f.name = G.Text(f, 11, "CENTER");
-	f.name:SetPoint("TOP", f, "TOP", 0, 0);
-	f.bar = G.NewBar(f, 240, 13, 0.78, 0.12, 0.10);
-	f.bar:SetPoint("TOP", f, "TOP", 0, -14);
-	f.hpText = G.Text(f.bar, 10, "CENTER");
-	f.hpText:SetPoint("CENTER", f.bar, "CENTER", 0, 0);
+	f.bar = G.NewGwBar(f, TARGETW, TARGETH);
+	f.bar:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0);
+	f.bar:SetColor(0.80, 0.14, 0.12);
+
+	local tf = CreateFrame("Frame", nil, f);
+	tf:SetAllPoints(f);
+	tf:SetFrameLevel(f.bar:GetFrameLevel() + 4);
+	f.name = G.Text(tf, 11, "LEFT");
+	f.name:SetPoint("LEFT", f, "LEFT", 10, 0);
+	f.name:SetWidth(TARGETW - 130);
+	f.name:SetHeight(14);
+	f.hpText = G.Text(tf, 11, "RIGHT");
+	f.hpText:SetPoint("RIGHT", f, "RIGHT", -20, 0);
+
+	local badge = CreateFrame("Frame", nil, tf);
+	badge:SetWidth(28);
+	badge:SetHeight(28);
+	badge:SetPoint("CENTER", f, "RIGHT", 0, 0);
+	badge:SetFrameLevel(tf:GetFrameLevel() + 2);
+	local ring = badge:CreateTexture(nil, "BACKGROUND");
+	ring:SetTexture(G.MASK);
+	ring:SetVertexColor(0.66, 0.66, 0.70, 1);
+	ring:SetAllPoints(badge);
+	local disc = badge:CreateTexture(nil, "BORDER");
+	disc:SetTexture(G.MASK);
+	disc:SetVertexColor(0.04, 0.04, 0.05, 1);
+	disc:SetPoint("TOPLEFT", badge, "TOPLEFT", 2, -2);
+	disc:SetPoint("BOTTOMRIGHT", badge, "BOTTOMRIGHT", -2, 2);
+	local icon = badge:CreateTexture(nil, "ARTWORK");
+	icon:SetWidth(18);
+	icon:SetHeight(18);
+	icon:SetPoint("CENTER", badge, "CENTER", 0, 0);
+	badge:Hide();
+	f.badge = badge;
+	f.badgeIcon = icon;
+end
+
+local function SetBadge(f, kind)
+	if ( f.badgeKind == kind ) then
+		return;
+	end
+	f.badgeKind = kind;
+	local icon = f.badgeIcon;
+	if ( kind == "friend" ) then
+		f.badge:Hide();
+		return;
+	end
+	icon:Show();
+	if ( kind == "elite" ) then
+		if ( not G.SetCrown(icon) ) then
+			G.SetSkull(icon, "tiny");
+			icon:Show();
+		end
+		icon:SetVertexColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 1);
+	else
+		G.SetSkull(icon, "tiny");
+		icon:SetVertexColor(0.86, 0.80, 0.78, 1);
+	end
+	f.badge:Show();
 end
 
 -- the boss rows move down while the target bar is up
@@ -763,7 +819,7 @@ function G.PlaceBosses(withTarget)
 	end
 	c:ClearAllPoints();
 	if ( withTarget ) then
-		c:SetPoint("TOP", UIParent, "TOP", 0, -132);
+		c:SetPoint("TOP", UIParent, "TOP", 0, -126);
 	else
 		c:SetPoint("TOP", UIParent, "TOP", 0, -98);
 	end
@@ -874,9 +930,10 @@ function G.UpdateTarget(dt)
 	if ( f.shownName ~= name or f.shownKind ~= kind ) then
 		f.shownName, f.shownKind = name, kind;
 		f.name:SetText(name);
+		SetBadge(f, kind);
 		if ( kind == "elite" ) then
-			f.name:SetTextColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
-			f.bar:SetColor(0.80, 0.50, 0.08);
+			f.name:SetTextColor(1, 0.95, 0.78);              -- cream: gold would vanish on the gold bar
+			f.bar:SetColor(0.88, 0.56, 0.10);
 		elseif ( kind == "friend" ) then
 			-- a friend: the same bar in green, the name in the class colour (a hero) or soft green (a creature)
 			local token = nil;
@@ -892,7 +949,7 @@ function G.UpdateTarget(dt)
 			f.bar:SetColor(0.30, 0.72, 0.22);
 		else
 			f.name:SetTextColor(1, 1, 1);
-			f.bar:SetColor(0.78, 0.12, 0.10);
+			f.bar:SetColor(0.80, 0.14, 0.12);
 		end
 	end
 	frac = G.Clamp(frac, 0, 1);

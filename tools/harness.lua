@@ -89,14 +89,36 @@ impl.SetZoom = function(self, z)
 end
 impl.SetMovable = function() end
 impl.RegisterForDrag = function() end
+impl.RegisterForClicks = function(self, a, b, c, d)
+	self.clicks = {}
+	for _, v in ipairs({ a, b, c, d }) do table.insert(self.clicks, v) end
+end
 impl.RegisterEvent = function() end
 impl.StartMoving = function() end
 impl.StopMovingOrSizing = function() end
 impl.SetClampedToScreen = function() end
-impl.GetPoint = function() return "CENTER", nil, "CENTER", 0, 0 end
+impl.GetPoint = function(self)
+	local p = self.pts and self.pts[1]
+	if p then return p[1], p[2], p[3], p[4], p[5] end
+	return "CENTER", nil, "CENTER", 0, 0
+end
 impl.ClearAllPoints = function(self) self.points = 0; self.pts = {}; self.allpts = nil end
-impl.SetScale = function(self, v) needNum("SetScale", v); assert(v > 0) end
-impl.SetAlpha = function(self, v) needNum("SetAlpha", v) end
+impl.SetScale = function(self, v) needNum("SetScale", v); assert(v > 0); self.scale = v end
+impl.GetScale = function(self) return rawget(self, "scale") or 1 end
+impl.SetAlpha = function(self, v) needNum("SetAlpha", v); self.alpha = v end
+impl.GetAlpha = function(self) return rawget(self, "alpha") or 1 end
+impl.GetTexture = function(self) return rawget(self, "tex") end
+impl.GetTextColor = function(self) local c = rawget(self, "tcol"); if c then return c[1], c[2], c[3] end return 1, 1, 1 end
+impl.GetNumChildren = function(self)
+	local n = 0
+	for _, w in ipairs(allWidgets) do
+		if (w.kind == "Frame" or w.kind == "Button" or w.kind == "StatusBar") and w.parent == self then n = n + 1 end
+	end
+	return n
+end
+impl.GetValue = function(self) return self.sbValue or 0 end
+impl.GetMinMaxValues = function(self) return self.sbMin or 0, self.sbMax or 1 end
+impl.GetStatusBarColor = function(self) local c = self.sbColor or { 1, 1, 1 }; return c[1], c[2], c[3] end
 impl.SetAllPoints = function(self, f) assert(type(f) == "table", "SetAllPoints needs a frame/region"); self.allpts = f; self.pts = {} end
 impl.CreateTexture = function(self, n, layer)
 	assert(self.kind ~= "Texture" and self.kind ~= "FontString", "CreateTexture on a region")
@@ -171,7 +193,7 @@ end
 impl.GetChildren = function(self)
 	local out = {}
 	for _, w in ipairs(allWidgets) do
-		if (w.kind == "Frame" or w.kind == "Button") and w.parent == self then table.insert(out, w) end
+		if (w.kind == "Frame" or w.kind == "Button" or w.kind == "StatusBar") and w.parent == self then table.insert(out, w) end
 	end
 	return unpack(out)
 end
@@ -197,7 +219,7 @@ function GetSpellTabInfo(t) return "General", "tex", 0, #book end
 function GetSpellName(i, b) assert(b == "spell"); local e = book[i]; if e then return e[1], e[2] end end
 
 function CreateFrame(kind, name, parent, template)
-	assert(kind == "Frame" or kind == "Button" or kind == "PlayerModel", "CreateFrame kind " .. tostring(kind))
+	assert(kind == "Frame" or kind == "Button" or kind == "PlayerModel" or kind == "StatusBar", "CreateFrame kind " .. tostring(kind))
 	assert(name == nil or type(name) == "string")
 	assert(parent == nil or type(parent) == "table", "CreateFrame parent " .. type(parent))
 	return new(kind, parent, name)
@@ -215,6 +237,8 @@ local plateCalls = { hide = 0, show = 0 }
 NAMEPLATES_ON = 1
 function HideNameplates() plateCalls.hide = plateCalls.hide + 1 end
 function ShowNameplates() plateCalls.show = plateCalls.show + 1 end
+function HideFriendNameplates() plateCalls.friendHide = (plateCalls.friendHide or 0) + 1 end
+function ShowFriendNameplates() plateCalls.friendShow = (plateCalls.friendShow or 0) + 1 end
 local errorsMsgs, raidMsgs = {}, {}
 -- like a real frame: the method lives in the shared metatable, so a shadow set on the frame can be removed again
 UIErrorsFrame = setmetatable({}, { __index = { AddMessage = function(self, m) table.insert(errorsMsgs, m) end } })
@@ -235,12 +259,19 @@ WorldFrame = new("Frame", nil, "WorldFrame")
 local ctEvents, ctCursor, ctHandler, ctProj = {}, 0, nil, {}
 function AZS_GetCombatTextCapabilities() return { apiVersion = 1 } end
 function AZS_RegisterCombatTextFrameHandler(h) ctHandler = h end
+-- every reader keeps its own cursor (reading consumes nothing): the cursor says which list of hits it has read
+-- ("c<list>:<how many of it>"); a test that puts a new table into ctEvents starts a new list
+local ctTab = nil
 function AZS_GetCombatTextEvents(cursor)
+	if ctEvents ~= ctTab then ctTab = ctEvents; ctCursor = ctCursor + 1 end
+	local from = 0
+	if type(cursor) == "string" then
+		local seq, n = cursor:match("^c(%d+):(%d+)$")
+		if seq and tonumber(seq) == ctCursor then from = tonumber(n) end
+	end
 	local out = {}
-	for _, e in ipairs(ctEvents) do table.insert(out, e) end
-	ctEvents = {}
-	ctCursor = ctCursor + 1
-	return { cursor = "c" .. ctCursor, events = out, hasMore = false, droppedCount = 0 }
+	for i = from + 1, #ctEvents do table.insert(out, ctEvents[i]) end
+	return { cursor = "c" .. ctCursor .. ":" .. #ctEvents, events = out, hasMore = false, droppedCount = 0 }
 end
 function AZS_ProjectCombatTextAnchors(ids, mode)
 	assert(mode == "follow" or mode == "impact")
@@ -365,14 +396,31 @@ mockRun = "r1"
 function AZS_GetMeterContext() return { runId = mockRun, metadataRevision = metaRev } end
 local snapshotCalls = 0
 snapshotQueries = {}
+snapRate = nil                       -- what the API says the last 10 seconds' rate is (nil: it cannot say)
+checkpoints = { made = 0, released = {}, expired = false }
+function AZS_CreateMeterCheckpoint(run)
+	assert(run == mockRun, "checkpoint for another run")
+	checkpoints.made = checkpoints.made + 1
+	return { checkpointId = "cp" .. checkpoints.made, runId = run }, nil
+end
+function AZS_ReleaseMeterCheckpoint(id) table.insert(checkpoints.released, id); return true, nil end
 function AZS_GetMeterSnapshot(q)
 	snapshotCalls = snapshotCalls + 1
 	table.insert(snapshotQueries, q); if #snapshotQueries > 20 then table.remove(snapshotQueries, 1) end
 	assert(q.apiVersion == 1 and q.runId == mockRun, "bad snapshot query")
 	assert(q.metric == "damage" or q.metric == "healing")
 	assert(q.period == "run" or q.period == "encounter")
-	assert(q.groupBy == "source" and q.windowSeconds == 0, "bad snapshot query")
 	assert(q.scope == "self" or q.scope == "party")
+	if q.windowSeconds == 10 then
+		-- the recent rate: one total, no rows asked for
+		assert(q.groupBy == "owner", "rate query groups by owner")
+		if q.checkpointId then
+			if checkpoints.expired or q.checkpointId ~= "cp" .. checkpoints.made then return nil, { code = "CHECKPOINT_EXPIRED", retryable = false } end
+		end
+		if snapRate == nil then return nil, { code = "NOT_READY", retryable = true, retryAfterSeconds = 0.2 } end
+		return { totals = { displayRate = { status = "ready", value = snapRate } }, rows = {}, sources = {} }, nil
+	end
+	assert(q.groupBy == "source" and q.windowSeconds == 0, "bad snapshot query")
 	return { rows = {}, sources = {
 		a = { name = "Frostbolt", icon = { status = "ready", path = "Interface\\Icons\\Spell_Frost_FrostBolt02" } },
 		b = { name = "Shadow Weaving", icon = { status = "ready", path = "Interface\\Icons\\Spell_Shadow_BlackPlague" } },
@@ -553,11 +601,12 @@ end)
 
 scenario("nameplates + native messages", function()
 	assert(plateCalls.hide > 0 and NAMEPLATES_ON == nil, "nameplates not hidden")
-	-- the game turns them on again: switched off again within half a second
+	-- the player presses the game's own key for them: they stay (1.8.0 switched them off again within a second)
 	NAMEPLATES_ON = 1
 	local before = plateCalls.hide
-	runTicks(12, 0.05)
-	assert(NAMEPLATES_ON == nil and plateCalls.hide > before, "nameplates not re-hidden")
+	runTicks(30, 0.05)
+	assert(NAMEPLATES_ON == 1 and plateCalls.hide == before, "the game's own nameplates are fought")
+	NAMEPLATES_ON = nil
 	-- native centre-screen messages are swallowed
 	UIErrorsFrame:AddMessage("Mother Fang enters the battlefield!")
 	RaidNotice_AddMessage(nil, "Boss engaged")
@@ -572,15 +621,16 @@ scenario("nameplates + native messages", function()
 	SlashCmdList["AZSGW2"]("messages off")
 	UIErrorsFrame:AddMessage("x3"); RaidNotice_AddMessage(nil, "y3")
 	assert(table.getn(errorsMsgs) == 2 and table.getn(raidMsgs) == 1, "messages off did not silence")
-	-- /gw2 plates on gives nameplates back and they stay
+	-- /gw2 plates on: the game's plates are switched on (the GW2 ones are drawn on them) and they stay
+	local showBefore = plateCalls.show
 	SlashCmdList["AZSGW2"]("plates on")
-	assert(plateCalls.show > 0 and NAMEPLATES_ON == 1, "plates on")
+	assert(plateCalls.show == showBefore + 1 and NAMEPLATES_ON == 1 and G.Opt("nameplates") == true, "plates on")
 	local h = plateCalls.hide
 	runTicks(12, 0.05)
-	assert(plateCalls.hide == h and NAMEPLATES_ON == 1, "plates re-hidden although switched on")
+	assert(plateCalls.hide == h and NAMEPLATES_ON == 1 and plateCalls.show == showBefore + 1, "plates re-hidden although switched on")
 	SlashCmdList["AZSGW2"]("plates off")
 	runTicks(12, 0.05)
-	assert(NAMEPLATES_ON == nil, "plates off")
+	assert(NAMEPLATES_ON == nil and plateCalls.hide == h + 1, "plates off")
 	assert(stockFrames.TargetFrame.shown == false, "stock TargetFrame still shown")
 	print("nameplates hidden + enforced, native messages silenced, toggles ok")
 end)
@@ -869,6 +919,141 @@ scenario("damage numbers", function()
 	print("damage numbers ok")
 end)
 
+scenario("nameplates: the game's plates get the GW2 look", function()
+	local P = G.plates
+	local function nativePlate(name, hp, color, elite)
+		local f = new("Frame", WorldFrame); f.shown = false
+		local border = new("Texture", f); border.tex = "Interface\\Tooltips\\Nameplate-Border"
+		local glow = new("Texture", f); glow.tex = "Interface\\Tooltips\\Nameplate-Glow"
+		local nm = new("FontString", f); nm.fontSet = true; nm.text = name; nm.tcol = { color[1], color[2], color[3] }
+		local lv = new("FontString", f); lv.fontSet = true; lv.text = "12"
+		local icon = new("Texture", f); icon.tex = "Interface\\Tooltips\\EliteNameplateIcon"; icon.shown = elite and true or false
+		local raid = new("Texture", f); raid.shown = false
+		local hb = new("StatusBar", f); hb.sbMin, hb.sbMax, hb.sbValue, hb.sbColor = 0, 100, hp, color
+		local cast = new("StatusBar", f); cast.shown = false
+		return { frame = f, name = nm, icon = icon, hb = hb, glow = glow, border = border }
+	end
+	local function show(pl) pl.frame.shown = true; this = pl.frame; if pl.frame.scripts.OnShow then pl.frame.scripts.OnShow() end end
+	local RED, GREEN = { 1, 0.05, 0.05 }, { 0.05, 1, 0.05 }
+	AZS_TARGET = nil; clientTarget = nil; AZS_UNITS = {}
+	local thug, captain, guard = nativePlate("Defias Thug", 80, RED, false), nativePlate("Defias Captain", 50, RED, true), nativePlate("Stormwind Guard", 100, GREEN, false)
+	for _, pl in ipairs({ thug, captain, guard }) do show(pl) end
+	-- an unrelated frame under WorldFrame (like a damage number's holder) and a plate-like frame without a health bar
+	local holder = new("Frame", WorldFrame); local ht = new("Texture", holder); ht.tex = "Interface\\Buttons\\WHITE8X8"
+	local fake = new("Frame", WorldFrame); local ft = new("Texture", fake); ft.tex = "Interface\\Tooltips\\Nameplate-Border"
+	runTicks(4, 0.1)
+	-- everything off: the game's plates are not touched
+	assert(#P.list == 0 and thug.border:GetAlpha() == 1 and thug.hb:GetAlpha() == 1, "plates touched with the options off")
+	-- Enable nameplates
+	SlashCmdList["AZSGW2"]("plates on")
+	runTicks(3, 0.1)
+	assert(#P.list == 3, "plates found: " .. #P.list)
+	assert(thug.border:GetAlpha() == 0 and thug.name:GetAlpha() == 0 and thug.hb:GetAlpha() == 0 and thug.glow:GetAlpha() == 0 and thug.icon:GetAlpha() == 0, "the game's own drawing is still visible")
+	assert(fake.azsPlate == false and holder.azsPlate == false, "a frame that is no plate was taken")
+	local pt, pc, pg = thug.frame.azsPlate, captain.frame.azsPlate, guard.frame.azsPlate
+	assert(pt.v.shown and pt.nameText.text == "Defias Thug" and pt.bar.lastFrac == 0.8, "enemy plate: " .. tostring(pt.nameText.text))
+	assert(pt.bar.fill.vc[1] > pt.bar.fill.vc[2] and pt.bar.fill.vc[2] < 0.3, "enemy bar is red")
+	assert(pt.text.text == "" and not pt.mark.shown and not pt.hl.shown, "a plain enemy shows no number, no mark")
+	assert(pc.v.shown and pc.text.text == "50%" and (pc.mark.shown == (G.art.custom and true or false)), "elite: number, crown only with the custom art")
+	assert(pc.nameText.tcol[1] > 0.9 and pc.nameText.tcol[3] < 0.7 and pc.bar.fill.vc[3] < 0.2, "elite is gold")
+	assert(not pg.v.shown, "a friend shows without the friend option")
+	-- the plate itself is the parent: it moves with the unit
+	assert(pt.v.parent == thug.frame and pt.v.pts[1][2] == thug.frame, "our drawing is not on the plate")
+	-- only elites and guardians
+	SlashCmdList["AZSGW2"]("plates elite on")
+	runTicks(6, 0.1)
+	assert(not pt.v.shown and pc.v.shown, "only elites: " .. tostring(pt.v.shown) .. " " .. tostring(pc.v.shown))
+	SlashCmdList["AZSGW2"]("plates elite off")
+	runTicks(6, 0.1)
+	assert(pt.v.shown and pc.v.shown, "plain enemies back")
+	-- friendly nameplates: the game's friendly plates are switched on, ours draws them green with the game's name colour
+	local fs = plateCalls.friendShow or 0
+	SlashCmdList["AZSGW2"]("plates friends on")
+	assert((plateCalls.friendShow or 0) == fs + 1 and FRIENDNAMEPLATES_ON == 1, "friendly plates not switched on")
+	runTicks(6, 0.1)
+	assert(pg.v.shown and pg.nameText.text == "Stormwind Guard" and pg.bar.fill.vc[2] > pg.bar.fill.vc[1], "friend plate")
+	assert(pg.text.text == "" , "friend text")
+	-- your target: outline, exact health
+	clientTarget = { name = "Defias Thug", hostile = true, hp = 50, hpm = 100, class = "normal" }
+	AZS_TARGET = { kind = "normal", id = "m1", name = "Defias Thug", hp = 1800, hpm = 2250, state = 0 }
+	thug.frame:SetAlpha(1); captain.frame:SetAlpha(0.5); guard.frame:SetAlpha(0.5)
+	runTicks(4, 0.1)
+	assert(pt.hl.shown and pt.text.text == "1.8K", "target plate: " .. tostring(pt.text.text))
+	assert(not pc.hl.shown and not pg.hl.shown, "another plate is outlined")
+	-- a guardian target is known exactly: the plate gets the elite look
+	clientTarget = { name = "Risen Construct", hostile = true, hp = 50, hpm = 100, class = "elite" }
+	local old = AZS_UnitKind; function AZS_UnitKind(u) return "guardian" end
+	local gd = nativePlate("Risen Construct", 70, RED, false); gd.frame:SetAlpha(1); show(gd)
+	runTicks(3, 0.1)
+	local pgd = gd.frame.azsPlate
+	assert(pgd and pgd.elite and (pgd.mark.shown == (G.art.custom and true or false)) and pgd.cKind == "elite", "guardian target did not get the elite look")
+	AZS_UnitKind = old; clientTarget = nil; AZS_TARGET = nil
+	gd.frame:SetAlpha(0.5)
+	-- a plate given to another unit: hidden until looked at, then the new unit
+	thug.name.text = "Wolf"; thug.hb.sbValue = 30
+	thug.frame.shown = false; show(thug)
+	assert(not pt.v.shown, "old unit still drawn after the plate was shown again")
+	runTicks(1, 0.1)
+	assert(pt.v.shown and pt.nameText.text == "Wolf" and pt.bar.lastFrac == 0.3, "plate not given to the new unit: " .. tostring(pt.nameText.text))
+	-- the unit dies: the bar goes
+	thug.hb.sbValue = 0
+	runTicks(8, 0.1)
+	assert(not pt.v.shown, "dead unit still drawn")
+	thug.hb.sbValue = 100
+	runTicks(8, 0.1)
+	-- a lot of plates: all drawn, but only a part is looked at per tick
+	local many = {}
+	for i = 1, 150 do many[i] = nativePlate("Spawn " .. i, 90, RED, false); show(many[i]) end
+	runTicks(1, 0.1)
+	assert(#P.list == 154, "plates found: " .. #P.list)
+	for i = 1, 150 do many[i].hb.sbValue = 40 end
+	local c0 = used.GetValue or 0
+	runTicks(1, 0.1)
+	local looked = (used.GetValue or 0) - c0
+	assert(looked <= 30, "one tick looked at " .. looked .. " plates")
+	runTicks(8, 0.1)
+	for i = 1, 150 do assert(many[i].frame.azsPlate.bar.lastFrac == 0.4, "plate " .. i .. " not kept up") end
+	-- steady state: a stable crowd costs few widget calls
+	local before = 0; for _, n in pairs(used) do before = before + n end
+	local snap = {}; for k, n in pairs(used) do snap[k] = n end
+	runTicks(10, 0.1)
+	local after = 0; for _, n in pairs(used) do after = after + n end
+	do
+		local diff = {}
+		for k, n in pairs(used) do if n - (snap[k] or 0) > 0 then table.insert(diff, { k, n - (snap[k] or 0) }) end end
+		table.sort(diff, function(a, b) return a[2] > b[2] end)
+		local out = {}
+		for i = 1, math.min(8, #diff) do out[#out + 1] = diff[i][1] .. "=" .. diff[i][2] end
+		print("  top calls in that second:", table.concat(out, " "))
+	end
+	print("nameplates: widget calls per second with 154 plates up:", math.floor((after - before) / 1.0 + 0.5))
+	-- switching them off gives the game's drawing back
+	SlashCmdList["AZSGW2"]("plates off"); SlashCmdList["AZSGW2"]("plates friends off")
+	runTicks(3, 0.1)
+	do
+		local b0 = 0; for _, n in pairs(used) do b0 = b0 + n end
+		runTicks(10, 0.1)
+		local b1 = 0; for _, n in pairs(used) do b1 = b1 + n end
+		print("nameplates: the same second with the plates off:", b1 - b0)
+		assert((after - before) - (b1 - b0) < 1500, "the plates themselves cost " .. ((after - before) - (b1 - b0)) .. " calls per second")
+	end
+	assert(thug.border:GetAlpha() == 1 and thug.hb:GetAlpha() == 1 and thug.name:GetAlpha() == 1 and not pt.v.shown, "game drawing not given back")
+	assert(not P.active and NAMEPLATES_ON == nil and FRIENDNAMEPLATES_ON == nil, "game plates not switched back")
+	-- /gw2 off gives them back too, and /gw2 on takes them again
+	SlashCmdList["AZSGW2"]("plates on"); runTicks(3, 0.1)
+	assert(thug.hb:GetAlpha() == 0)
+	AZSGW2DB.enabled = false; runTicks(3, 0.1)
+	assert(thug.hb:GetAlpha() == 1, "nameplates not released while the addon is off")
+	AZSGW2DB.enabled = true; runTicks(3, 0.1)
+	assert(thug.hb:GetAlpha() == 0, "nameplates not taken again")
+	SlashCmdList["AZSGW2"]("plates off"); runTicks(3, 0.1)
+	-- the debug report runs, with plates found and with none
+	SlashCmdList["AZSGW2"]("plates debug")
+	SlashCmdList["AZSGW2"]("plates")
+	SlashCmdList["AZSGW2"]("plates elite")
+	print("nameplates ok")
+end)
+
 scenario("settings window + unlock layout", function()
 	local f = G.settings
 	assert(f and not f:IsShown(), "settings should start closed")
@@ -884,10 +1069,13 @@ scenario("settings window + unlock layout", function()
 	for _, c in ipairs(f.checks) do if c.row.label == "Party frames" then c.scripts.OnClick() end end
 	runTicks(6, 0.25); assert(G.party.shown, "party frames not back")
 	-- nameplates / messages switches match the commands
-	for _, c in ipairs(f.checks) do if c.row.label == "Game's enemy nameplates" then c.scripts.OnClick() end end
-	assert(AZSGW2DB.plates == true and NAMEPLATES_ON == 1)
-	for _, c in ipairs(f.checks) do if c.row.label == "Game's enemy nameplates" then c.scripts.OnClick() end end
-	runTicks(12, 0.05); assert(NAMEPLATES_ON == nil)
+	for _, c in ipairs(f.checks) do if c.row.label == "Enable nameplates" then c.scripts.OnClick() end end
+	assert(G.Opt("nameplates") == true and NAMEPLATES_ON == 1)
+	for _, c in ipairs(f.checks) do if c.row.label == "Enable nameplates" then c.scripts.OnClick() end end
+	runTicks(12, 0.05); assert(G.Opt("nameplates") == false and NAMEPLATES_ON == nil)
+	local labels = {}
+	for _, c in ipairs(f.checks) do labels[c.row.label] = true end
+	assert(labels["   only elites and guardians"] and labels["Enable friendly nameplates"] and labels["Enemies hit, on the skills"], "settings rows missing")
 	-- minimap switch detaches and re-attaches the game's minimap
 	for _, c in ipairs(f.checks) do if c.row.label == "GW2 minimap" then c.scripts.OnClick() end end
 	assert(Minimap.parent == MinimapCluster and not G.mm:IsShown(), "minimap option off did not hand the map back")
@@ -898,8 +1086,10 @@ scenario("settings window + unlock layout", function()
 	G.SetScaleAll(9); assert(AZSGW2DB.scale == 1.6, "scale not clamped")
 	G.SetScaleAll(1)
 	-- unlock: one gold box per movable frame; dragging saves the place
-	arg1 = "RightButton"; btn.scripts.OnClick()
-	assert(G.unlocked, "right click did not unlock")
+	-- the minimap icon only reacts to the left button (a right click used to unlock and leave people stuck)
+	assert(btn.clicks and #btn.clicks == 1 and btn.clicks[1] == "LeftButtonUp", "minimap icon should register left clicks only")
+	f.unlock.scripts.OnClick()
+	assert(G.unlocked, "unlock button did not unlock")
 	local boxes, keys = 0, {}
 	for _, m in ipairs(G.movables) do
 		assert(m.ov and m.ov.shown, "no overlay for " .. m.key)
@@ -913,7 +1103,7 @@ scenario("settings window + unlock layout", function()
 	orbM.ov.scripts.OnDragStart(); orbM.ov.scripts.OnDragStop()
 	assert(AZSGW2DB.pos.orb and AZSGW2DB.pos.orb[1], "dragged position not saved")
 	assert(G.HasPos("orb") and not G.HasPos("nonsense"))
-	arg1 = "RightButton"; btn.scripts.OnClick()
+	f.unlock.scripts.OnClick()
 	assert(not G.unlocked)
 	for _, m in ipairs(G.movables) do assert(not m.ov.shown, "overlay still shown after lock") end
 	-- a moved boss bar is left alone by the target bar's shifting
@@ -922,6 +1112,81 @@ scenario("settings window + unlock layout", function()
 	AZSGW2DB.pos.bosses = nil; AZSGW2DB.pos.orb = nil
 	f:Hide()
 	print("settings, options, unlock/lock, movables:", boxes)
+end)
+
+scenario("per-frame size in unlock mode", function()
+	local function near(a, b) return math.abs(a - b) < 0.0005 end
+	local oldCursor = GetCursorPosition
+	G.SetUnlocked(true)
+	assert(G.lockBar and G.lockBar.shown, "no lock bar while unlocked")
+	local orbM, tgtM = G.MovableByKey("orb"), G.MovableByKey("target")
+	assert(orbM and tgtM and orbM.ov and tgtM.ov)
+	-- what hangs off which movable frame
+	assert(G.groupOf[G.slots[1]] == "orb" and G.groupOf[G.slots[6]] == "orb" and G.groupOf[G.racial] == "orb", "slots not in the skill bar group")
+	assert(G.groupOf[G.resource] == "orb" and G.groupOf[G.status[1]] == "orb", "resource / status not in the skill bar group")
+	assert(G.groupOf[G.mapButton] == "mapButton" and G.groupOf[G.target] == "target")
+	assert(G.groupOf[G.meter] == "meter")
+	-- the wheel over the skill bar's box: the whole bar grows, nothing else does
+	arg1 = 1; orbM.ov.scripts.OnMouseWheel(); orbM.ov.scripts.OnMouseWheel()
+	assert(near(G.FrameScale("orb"), 1.1), "wheel did not size the skill bar: " .. G.FrameScale("orb"))
+	for _, f in ipairs({ G.orb, G.slots[1], G.slots[6], G.racial, G.wingL, G.resource, G.status[1], G.buffs[1], G.talentBtn, G.charBtn }) do
+		assert(near(f:GetScale(), 1.1), "a skill bar part did not grow")
+	end
+	for _, f in ipairs({ G.target, G.meter, G.party, G.mapButton, G.top }) do
+		assert(near(f:GetScale(), 1), "another frame grew with the skill bar")
+	end
+	assert(orbM.ov.size.text == "110%", "box does not show the size: " .. tostring(orbM.ov.size.text))
+	-- the anchor stays where it was on the screen: the offset shrinks by the same factor and is saved
+	assert(AZSGW2DB.pos.orb and near(AZSGW2DB.pos.orb[4], 34 / 1.1), "anchor offset not kept: " .. tostring(AZSGW2DB.pos.orb and AZSGW2DB.pos.orb[4]))
+	-- the global size multiplies it
+	G.SetScaleAll(1.25)
+	assert(near(G.slots[1]:GetScale(), 1.375) and near(G.target:GetScale(), 1.25), "global size does not multiply")
+	G.SetScaleAll(1)
+	-- a right click on the box puts the size back
+	arg1 = "RightButton"; orbM.ov.scripts.OnMouseUp()
+	assert(G.FrameScale("orb") == 1 and AZSGW2DB.fscale.orb == nil and near(G.slots[1]:GetScale(), 1), "right click did not reset")
+	assert(near(AZSGW2DB.pos.orb[4], 34), "offset not restored after the reset")
+	-- the corner grip: dragging out grows, in shrinks, the limits hold
+	local cx, cy = 500, 300
+	function GetCursorPosition() return cx, cy end
+	local grip = tgtM.ov.grip
+	assert(grip, "no grip on the box")
+	arg1 = "LeftButton"; grip.scripts.OnMouseDown()
+	assert(grip.scripts.OnUpdate, "grip does not follow the cursor")
+	cx, cy = 550, 250; grip.scripts.OnUpdate()          -- 50 right, 50 down: the box was 100 wide
+	assert(near(G.FrameScale("target"), 1.5), "grip drag out: " .. G.FrameScale("target"))
+	assert(near(G.target:GetScale(), 1.5))
+	cx, cy = 5000, -5000; grip.scripts.OnUpdate()
+	assert(G.FrameScale("target") == 2, "upper limit")
+	cx, cy = -5000, 5000; grip.scripts.OnUpdate()
+	assert(G.FrameScale("target") == 0.5, "lower limit")
+	grip.scripts.OnMouseUp()
+	assert(grip.scripts.OnUpdate == nil, "grip keeps following after the button is up")
+	GetCursorPosition = oldCursor
+	-- the size survives a reload: it is in the saved variables and applied once everything is built
+	assert(AZSGW2DB.fscale.target == 0.5)
+	G.groupOf = nil; G.ApplyScales()
+	assert(near(G.target:GetScale(), 0.5) and near(G.slots[1]:GetScale(), 1))
+	G.SetFrameScale("target", 1)                          -- back to the full size: the anchor goes back where it was
+	assert(AZSGW2DB.fscale.target == nil and near(AZSGW2DB.pos.target[4], -96), "target anchor not restored: " .. tostring(AZSGW2DB.pos.target and AZSGW2DB.pos.target[4]))
+	AZSGW2DB.pos.target = nil
+	-- damaged saved values are cleaned
+	AZSGW2DB.fscale = { orb = "x", wide = 99, tiny = 0.01, ok = 1.2, [3] = 1.5 }
+	G.CleanDB(AZSGW2DB)
+	assert(AZSGW2DB.fscale.orb == nil and AZSGW2DB.fscale.wide == 2 and AZSGW2DB.fscale.tiny == 0.5 and AZSGW2DB.fscale.ok == 1.2 and AZSGW2DB.fscale[3] == nil, "fscale not cleaned")
+	AZSGW2DB.fscale = nil; G.CleanDB(AZSGW2DB); assert(type(AZSGW2DB.fscale) == "table")
+	-- the lock bar locks
+	G.ApplyScales()
+	G.lockBar.scripts.OnClick()
+	assert(not G.unlocked and not G.lockBar.shown, "lock bar did not lock")
+	for _, m in ipairs(G.movables) do assert(not m.ov.shown, "overlay still shown") end
+	-- reset positions also puts the sizes back
+	AZSGW2DB.fscale = { orb = 1.3 }
+	G.ResetPositions()
+	assert(next(AZSGW2DB.fscale) == nil and next(AZSGW2DB.pos) == nil, "reset did not clear sizes")
+	G.ApplyScales()
+	arg1 = nil
+	print("per-frame size ok")
 end)
 
 scenario("skill rank text + no flash", function()
@@ -1126,9 +1391,80 @@ scenario("layout dump (busy: many summons / totems / timers)", function()
 		return t
 	end
 	runTicks(10, 0.05)
+	-- the talents' clocks are not shown any more (they looked like empty icons): only summons and totems
+	local shownStatus = 0
+	for i = 1, #G.status do
+		local st = G.status[i]
+		if st.shown then
+			shownStatus = shownStatus + 1
+			assert(st.data and st.data.note ~= "Recharging", "a talent clock is in the status row")
+		end
+	end
+	assert(shownStatus == 10, "status row: expected 7 summons + 3 totems, got " .. shownStatus)
 	dumpLayout(OUTDIR .. "/layout_busy.txt")
 	AZS_GetSummonGroups, AZS_GetTotems, AZS_GetTimers = sg, tt, tm
 	runTicks(10, 0.05)
+end)
+
+scenario("skills: enemies hit by the last cast", function()
+	local function hit(ability, target, t, extra)
+		local e = { kind = "damage", amount = 10, sourceKind = "player", targetId = target, presentedAt = t or GetTime(),
+			meterSourceKey = "ability:" .. ability .. ":r1" }
+		if extra then for k, v in pairs(extra) do e[k] = v end end
+		return e
+	end
+	local frost, blizz = G.slots[1], G.slots[4]
+	assert(frost.entry.key == "frostbolt" and blizz.entry.key == "blizzard")
+	assert(frost.hitChip and blizz.hitChip and G.racial.hitChip, "no hit chip on a skill")
+	assert(not frost.hitChip.shown, "chip shown without any hit")
+	assert(G.Opt("hits") == true, "the option is on by default")
+	-- Blizzard hits three different enemies in one go: the chip says 3, at the top (rank chip is at the bottom)
+	local t0 = GetTime()
+	ctEvents = { hit("blizzard", "e1", t0), hit("blizzard", "e2", t0), hit("blizzard", "e3", t0 + 0.02), hit("blizzard", "e1", t0 + 0.02) }
+	runTicks(2, 0.1)
+	assert(blizz.hitChip.shown and blizz.hitText.text == "3", "chip should say 3: " .. tostring(blizz.hitText.text))
+	assert(not frost.hitChip.shown, "another skill got a chip")
+	local pt = blizz.hitChip.pts[1]
+	assert(pt[3] == "TOP" and pt[5] < 0 + 1, "chip is not at the top")
+	-- single hits of one enemy show nothing (the chip is for the skills that hit more than one)
+	ctEvents = { hit("frostbolt", "e1", GetTime()) }
+	runTicks(3, 0.1)
+	assert(not frost.hitChip.shown, "one enemy should show no chip")
+	-- not counted: misses, pets, other abilities' pulses are the same ability, the meter's non-ability lines
+	ctEvents = { hit("frostbolt", "e1", GetTime(), { kind = "miss" }), hit("frostbolt", "e2", GetTime(), { sourceKind = "pet" }),
+		{ kind = "damage", sourceKind = "player", targetId = "e9", presentedAt = GetTime(), meterSourceKey = "basic_attack:melee" },
+		{ kind = "damage", sourceKind = "player", presentedAt = GetTime(), meterSourceKey = "ability:frostbolt:r1" } }
+	runTicks(3, 0.1)
+	assert(not frost.hitChip.shown, "misses / pets / lines without a target were counted")
+	-- the pulse variant of a skill counts for the skill; a new cast with fewer enemies lowers the number once it is over
+	local t1 = GetTime()
+	ctEvents = { hit("blizzard", "e1", t1, { meterSourceKey = "ability:blizzard:r1:pulse" }), hit("blizzard", "e2", t1) }
+	runTicks(1, 0.1)
+	assert(blizz.hitChip.shown and blizz.hitText.text == "3", "number must not flicker down while the cast goes on: " .. blizz.hitText.text)
+	runTicks(6, 0.1)                                      -- the cast is over: the real number (2) shows
+	assert(blizz.hitText.text == "2", "after the cast: " .. tostring(blizz.hitText.text))
+	-- it goes away four seconds after the last hit
+	runTicks(20, 0.1)
+	assert(blizz.hitChip.shown, "chip went before the four seconds were over")
+	runTicks(25, 0.1)
+	assert(not blizz.hitChip.shown, "chip stays after the hits stopped")
+	-- an old batch (a delayed read) is not shown
+	ctEvents = { hit("blizzard", "e1", GetTime() - 10), hit("blizzard", "e2", GetTime() - 10) }
+	runTicks(3, 0.1)
+	assert(not blizz.hitChip.shown, "old hits were shown")
+	-- the option switches it off
+	ctEvents = { hit("blizzard", "e1"), hit("blizzard", "e2") }
+	runTicks(2, 0.1)
+	assert(blizz.hitChip.shown)
+	G.SetOpt("hits", false); runTicks(3, 0.1)
+	assert(not blizz.hitChip.shown and next(G.hits) == nil, "option off did not clear")
+	ctEvents = { hit("blizzard", "e1"), hit("blizzard", "e2") }
+	runTicks(3, 0.1)
+	assert(not blizz.hitChip.shown, "counts hits with the option off")
+	G.SetOpt("hits", true)
+	ctEvents = {}
+	runTicks(3, 0.1)
+	print("enemies hit chip ok")
 end)
 
 scenario("cooldown counts down", function()
@@ -1740,7 +2076,7 @@ scenario("hardening: saved variables, slash input, protected frames, error recov
 		bind = { character = "TOGGLECHARACTER0", talents = "not a name!", [1] = "X" },
 		cvSaved = { CombatDamage = "1", Big = string.rep("x", 100), [2] = "1" }, mapYards = -4 }
 	G.CleanDB(bad)
-	assert(bad.scale == 1 and bad.enabled == true and bad.customArt == true and bad.plates == true, "scalars")
+	assert(bad.scale == 1 and bad.enabled == true and bad.customArt == true and bad.plates == nil and bad.opt.nameplates == true, "scalars / plates migration")
 	assert(bad.opt.dmgCrit == true and bad.opt.dmg == nil and bad.opt[3] == nil, "opt")
 	assert(bad.pos.top and bad.pos.orb == nil and bad.pos.party == nil and bad.pos.junk == nil and bad.pos.far == nil, "pos")
 	assert(#bad.hide == 1 and bad.hide[1] == "SomeFrame", "hide list: " .. table.concat(bad.hide, ","))
@@ -1828,7 +2164,7 @@ scenario("API call budget (10 s at 60 fps)", function()
 	assert(plateCalls.hide - h0 <= 1, "HideNameplates is called too often")
 	for _, n in ipairs(names) do print("  calls in 10 s:", n, calls[n]) end
 	assert(calls.AZS_GetLairs <= 300, "minimap/guardian list read lairs too often: " .. calls.AZS_GetLairs)
-	assert(calls.AZS_GetMeterSnapshot <= 4, "meter snapshot read too often: " .. calls.AZS_GetMeterSnapshot)
+	assert(calls.AZS_GetMeterSnapshot <= 12, "meter snapshot read too often (once a second for the rate, plus the lines): " .. calls.AZS_GetMeterSnapshot)
 	assert(calls.AZS_GetMeterLoadout <= 1, "loadout read too often: " .. calls.AZS_GetMeterLoadout)
 	-- a new revision is picked up within the second
 	local before = calls.AZS_GetMeterLoadout
@@ -1963,8 +2299,8 @@ scenario("meter: reset, the 10 second rate, party icons", function()
 	assert(math.abs(kRate() - 5000) < 400, "10 s rate near 5000: " .. f.summary.text)
 	assert(f.resetBtn and f.resetBtn.scripts.OnClick, "reset button")
 	pcall(f.resetBtn.scripts.OnEnter)
-	-- the rate costs no API call
-	assert(snapshotCalls - before <= 2, "rate used the snapshot API: " .. (snapshotCalls - before))
+	-- the rate asks the API once a second at most (150 ticks of 0.1 s = 15 s)
+	assert(snapshotCalls - before <= 18, "rate used the snapshot API too often: " .. (snapshotCalls - before))
 	-- twice as much damage: the rate follows within the window, not the whole run
 	for i = 1, 150 do dmg = dmg + 1000; runTicks(1, 0.1) end
 	assert(math.abs(kRate() - 10000) < 800, "10 s rate follows: " .. f.summary.text)
@@ -2017,6 +2353,117 @@ scenario("meter: reset, the 10 second rate, party icons", function()
 	AZSGW2DB.meterMode = "damage"
 	AZS_GetMeter = nil                        -- as the scenarios after this one expect
 	G.meterResetAt = nil
+end)
+
+scenario("layout dump: elite target bar, nameplates, enemies hit chips", function()
+	-- an elite target
+	AZS_UNITS = { { kind = "elite", id = 7, name = "Defias Captain", hp = 1000, hpm = 4000, state = 0 } }
+	clientTarget = { name = "Defias Captain", hostile = true, hp = 25, hpm = 100, class = "elite" }
+	AZS_TARGET = { kind = "elite", id = "m7", name = "Defias Captain", hp = 1000, hpm = 4000, state = 0 }
+	fire("PLAYER_TARGET_CHANGED"); runTicks(6, 0.05)
+	assert(G.target.shown and G.target.badge.shown, "elite target bar with its badge")
+	-- hit chips on two skills
+	local function hit(ability, target) return { kind = "damage", amount = 10, sourceKind = "player", targetId = target, presentedAt = GetTime(), meterSourceKey = "ability:" .. ability .. ":r1" } end
+	ctEvents = { hit("blizzard", "a"), hit("blizzard", "b"), hit("blizzard", "c"), hit("frost_nova", "a"), hit("frost_nova", "b"), hit("pyroblast", "a"), hit("pyroblast", "b"), hit("pyroblast", "c"), hit("pyroblast", "d"), hit("pyroblast", "e"), hit("pyroblast", "f"), hit("pyroblast", "g"), hit("pyroblast", "h"), hit("pyroblast", "i"), hit("pyroblast", "j") }
+	runTicks(3, 0.1)
+	AZSGW2DB.opt = AZSGW2DB.opt or {}
+	G.SetOpt("nameplates", true); G.SetOpt("platesFriend", true); G.EnforcePlates()
+	local function plate(name, hp, color, elite, x, y)
+		local f = new("Frame", WorldFrame); f.shown = false; f:SetWidth(110); f:SetHeight(30)
+		f:SetPoint("BOTTOMLEFT", WorldFrame, "BOTTOMLEFT", x, y)
+		local border = new("Texture", f); border.tex = "Interface\\Tooltips\\Nameplate-Border"
+		new("Texture", f)
+		local nm = new("FontString", f); nm.fontSet = true; nm.text = name; nm.tcol = { color[1], color[2], color[3] }
+		new("FontString", f); local icon = new("Texture", f); icon.tex = "Interface\\Tooltips\\EliteNameplateIcon"; icon.shown = elite
+		new("Texture", f)
+		local hb = new("StatusBar", f); hb.sbMin, hb.sbMax, hb.sbValue, hb.sbColor = 0, 100, hp, color
+		new("StatusBar", f).shown = false
+		f.shown = true
+		return f
+	end
+	local RED, GREEN = { 1, 0.05, 0.05 }, { 0.05, 1, 0.05 }
+	local a = plate("Umbraglow Stinger", 55, RED, false, 560, 420)
+	local b = plate("Defias Captain", 25, RED, true, 760, 470)
+	local c = plate("Jungle Golem", 90, RED, false, 960, 400)
+	local d = plate("Carolin", 70, GREEN, false, 700, 330)
+	b:SetAlpha(1); a:SetAlpha(0.6); c:SetAlpha(0.6); d:SetAlpha(0.6)
+	runTicks(4, 0.1)
+	local wp = WorldFrame.parent; WorldFrame.parent = UIParent
+	dumpLayout(OUTDIR .. "/layout_plates.txt")
+	WorldFrame.parent = wp
+	-- take it all down again
+	for _, f in ipairs({ a, b, c, d }) do f.shown = false end
+	G.SetOpt("nameplates", false); G.SetOpt("platesFriend", false); G.EnforcePlates()
+	runTicks(3, 0.1)
+	ctEvents = {}
+	clientTarget = nil; AZS_TARGET = nil; AZS_UNITS = {}
+	fire("PLAYER_TARGET_CHANGED"); runTicks(60, 0.1)
+end)
+
+scenario("meter: pet classes, the rate comes from the API, dips do not start it over", function()
+	local f = G.meter
+	local function lastRateQuery()
+		for k = table.getn(snapshotQueries), 1, -1 do
+			if snapshotQueries[k].windowSeconds == 10 then return snapshotQueries[k] end
+		end
+		return {}
+	end
+	local function kRate()
+		local v = tonumber(string.match(f.summary.text, "10s [DH]PS: ([%d%.]+)")) or -1
+		local u = string.match(f.summary.text, "10s [DH]PS: [%d%.]+(%a?)")
+		if u == "K" then v = v * 1000 elseif u == "M" then v = v * 1e6 end
+		return v
+	end
+	local dmg = 5000000
+	local lines = { { name = "Frostbolt", dmg = dmg, dps = 1, share = 1, proc = 0 } }
+	AZS_GetMeter = function() lines[1].dmg = dmg; return lines, dmg, 1 end
+	AZSGW2DB.meterMode = "damage"; G.meterAcc = 99
+	local made0 = checkpoints.made
+	G.ResetMeter(); G.meterAcc = 99
+	-- the API knows the pets' damage too: its rate is shown although the lines hardly move
+	snapRate = 7800
+	runTicks(30, 0.1)
+	assert(math.abs(kRate() - 7800) < 100, "rate from the API: " .. f.summary.text)
+	assert(checkpoints.made == made0 + 1 and lastRateQuery().checkpointId == "cp" .. checkpoints.made, "the reset's checkpoint is in the rate query")
+	assert(lastRateQuery().windowSeconds == 10 and lastRateQuery().scope == "self", "rate query")
+	-- the API says nothing (older game, an error): the addon works it out, a pet that leaves the list does not stop it
+	snapRate = nil
+	AZSGW2DB.meterMode = "damage"
+	local dips = 0
+	for i = 1, 300 do
+		dmg = dmg + 500
+		if math.mod(i, 20) == 0 then dmg = dmg - 4000; dips = dips + 1 end   -- every 2 s a source drops out of the list
+		runTicks(1, 0.1)
+	end
+	assert(dips == 15)
+	local r = kRate()
+	assert(r > 3000 and r < 6000, "rate with dips (5000 a second added, a dip every 2 s): " .. f.summary.text)
+	-- a different tab: the same
+	AZSGW2DB.meterMode = "healing"; G.meterAcc = 99
+	snapRate = 1234
+	runTicks(30, 0.1)
+	assert(math.abs(kRate() - 1234) < 60 and lastRateQuery().metric == "healing", "healing rate: " .. f.summary.text)
+	AZSGW2DB.meterMode = "damage"
+	-- the checkpoint is gone (a new run): the next ask is made without it and the rate goes on
+	snapRate = 900; checkpoints.expired = true
+	runTicks(40, 0.1)
+	assert(math.abs(kRate() - 900) < 20 and lastRateQuery().checkpointId == nil, "rate after the checkpoint expired: " .. f.summary.text)
+	checkpoints.expired = false
+	-- the next reset gives the old checkpoint back and takes a new one
+	local rel0 = #checkpoints.released
+	G.ResetMeter(); runTicks(30, 0.1)
+	assert(#checkpoints.released == rel0 + 1 or checkpoints.made > made0 + 1, "checkpoint not renewed on reset")
+	-- an API rate that is not a number is ignored
+	snapRate = 0 / 0
+	runTicks(40, 0.1)
+	assert(kRate() >= 0, "NaN rate shown: " .. f.summary.text)
+	-- a stale API answer (the API went quiet) is not shown for ever
+	snapRate = 5000; runTicks(30, 0.1)
+	snapRate = nil; runTicks(60, 0.1)
+	assert(kRate() == 0 or kRate() == -1 or kRate() < 5000, "stale API rate stays: " .. f.summary.text)
+	AZS_GetMeter = nil; snapRate = nil
+	G.meterResetAt = nil
+	print("pet meter ok")
 end)
 
 scenario("target bar: friend dump for the preview", function()

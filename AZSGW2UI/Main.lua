@@ -28,7 +28,6 @@ function G.CleanDB(d)
 	if ( type(d.customArt) ~= "boolean" ) then
 		d.customArt = true;
 	end
-	d.plates = d.plates and true or nil;
 	d.messages = d.messages and true or nil;
 	if ( d.mapYards ~= nil and not ( IsNumber(d.mapYards) and d.mapYards > 20 and d.mapYards < 2000 ) ) then
 		d.mapYards = nil;
@@ -36,6 +35,11 @@ function G.CleanDB(d)
 	if ( type(d.opt) ~= "table" ) then
 		d.opt = {};
 	end
+	-- before 1.8.1 "plates" meant the game's own enemy nameplates: now they are the GW2 nameplates
+	if ( d.plates and d.opt.nameplates == nil ) then
+		d.opt.nameplates = true;
+	end
+	d.plates = nil;
 	for k, v in pairs(d.opt) do
 		if ( type(k) ~= "string" or type(v) ~= "boolean" ) then
 			d.opt[k] = nil;
@@ -48,6 +52,16 @@ function G.CleanDB(d)
 		if ( type(k) ~= "string" or type(p) ~= "table" or not ANCHORS[p[1] or ""] or not ANCHORS[p[2] or ""]
 			or not IsNumber(p[3]) or not IsNumber(p[4]) ) then
 			d.pos[k] = nil;
+		end
+	end
+	if ( type(d.fscale) ~= "table" ) then
+		d.fscale = {};
+	end
+	for k, v in pairs(d.fscale) do
+		if ( type(k) ~= "string" or not IsNumber(v) ) then
+			d.fscale[k] = nil;
+		else
+			d.fscale[k] = G.Clamp(v, G.FSCALE_MIN, G.FSCALE_MAX);
 		end
 	end
 	local clean = {};
@@ -213,12 +227,19 @@ function G.Start()
 		end
 	end
 
+	-- every frame exists now: work out which ones hang off which movable frame, and size them
+	local ok, err = pcall(G.ApplyScales);
+	if ( not ok ) then
+		G.Print("could not apply frame sizes: " .. tostring(err));
+	end
+
 	AddUpdater("visibility", G.Visibility, 0.2, true);
 	AddUpdater("enforce", G.EnforceHidden, 0.5, true);
 	AddUpdater("hunt", G.UpdateHunt, 0.05, true);
 	AddUpdater("orb", G.UpdateOrb, 0);
 	AddUpdater("resource", G.UpdateResource, 0.05);
 	AddUpdater("skills", G.UpdateSkills, 0.03);
+	AddUpdater("hits", G.UpdateHits, 0.1);
 	AddUpdater("jewelry", G.UpdateJewelry, 1.0);
 	AddUpdater("status", G.UpdateStatus, 0.2);
 	AddUpdater("auras", G.UpdateAuras, 0.2);
@@ -235,6 +256,7 @@ function G.Start()
 	AddUpdater("meter", G.UpdateMeter, 0.3);
 	AddUpdater("minimap", G.UpdateMinimap, 0, true);
 	AddUpdater("arrows", G.UpdateGuardianArrows, 0.05);
+	AddUpdater("plates", G.UpdatePlates, 0.1, true);
 
 	local driver = CreateFrame("Frame", "AZSGW2Driver", UIParent);
 	driver.azs = true;
@@ -269,6 +291,8 @@ events:SetScript("OnEvent", function()
 		elseif ( AZSGW2DB.enabled ) then
 			G.HideGameHud(true);
 		end
+		-- the game forgets which nameplates are on when a world loads: switch them to the options again
+		G.platesApplied, G.friendApplied = nil, nil;
 	end
 end);
 
@@ -277,7 +301,7 @@ end);
 local function Help()
 	G.Print("commands:");
 	G.Print("/gw2 config : settings window (also: left click the round icon at the minimap)");
-	G.Print("/gw2 unlock | lock : move every frame freely (also: right click the icon)");
+	G.Print("/gw2 unlock | lock : move and resize every frame freely (a bar at the top locks it again)");
 	G.Print("/gw2 off | on : give the game's own HUD back / use this one");
 	G.Print("/gw2 scale <0.6-1.6> : size of everything");
 	G.Print("/gw2 reset : forget moved windows");
@@ -287,7 +311,7 @@ local function Help()
 	G.Print("/gw2 find <text> : list frames that show that text (to find a frame name)");
 	G.Print("/gw2 bind <character|talents> <BINDING> : key binding the two buttons run");
 	G.Print("/gw2 bindings [text] : list key binding names");
-	G.Print("/gw2 plates on|off : the game's enemy nameplates (off by default)");
+	G.Print("/gw2 plates on|off | elite on|off | friends on|off | debug : GW2 nameplates (off by default)");
 	G.Print("/gw2 messages on|off : the game's own centre-screen messages (off by default)");
 	G.Print("/gw2 dmg all | crits | off | ticks on | ticks off : damage numbers");
 	G.Print("/gw2 char [on|off] : open the character panel / use it instead of the game's window");
@@ -525,17 +549,36 @@ function G.Slash(msg)
 			G.Print("talents: " .. G.BindingText("talents"));
 			G.Print("usage: /gw2 bind <character|talents> <BINDING>   (names: /gw2 bindings)");
 		end
-	elseif ( cmd == "plates" or cmd == "messages" ) then
-		if ( rest ~= "on" and rest ~= "off" ) then
-			G.Print(cmd .. " are " .. ( AZSGW2DB[cmd] and "on" or "off" ) .. ". Use /gw2 " .. cmd .. " on or /gw2 " .. cmd .. " off.");
+	elseif ( cmd == "plates" ) then
+		local _, _, which, state = string.find(rest, "^(%S*)%s*(%S*)$");
+		which = which or "";
+		state = state or "";
+		local key = nil;
+		if ( which == "on" or which == "off" ) then
+			key, state = "nameplates", which;
+		elseif ( which == "elite" or which == "elites" ) then
+			key = "platesElite";
+		elseif ( which == "friends" or which == "friend" or which == "friendly" ) then
+			key = "platesFriend";
+		elseif ( which == "debug" ) then
+			G.PlatesReport();
 			return;
 		end
-		if ( cmd == "plates" ) then
-			G.SetPlates(rest == "on");
-		else
-			G.SetMessages(rest == "on");
+		if ( not key or ( state ~= "on" and state ~= "off" ) ) then
+			G.Print("nameplates are " .. ( G.Opt("nameplates") and "on" or "off" ) .. ", only elites and guardians "
+				.. ( G.Opt("platesElite") and "on" or "off" ) .. ", friendly " .. ( G.Opt("platesFriend") and "on" or "off" ) .. ".");
+			G.Print("Use /gw2 plates on | off,  /gw2 plates elite on | off,  /gw2 plates friends on | off,  /gw2 plates debug.");
+			return;
 		end
-		G.Print(cmd .. " " .. rest);
+		G.SetPlateOpt(key, state == "on");
+		G.Print("plates " .. which .. " " .. state);
+	elseif ( cmd == "messages" ) then
+		if ( rest ~= "on" and rest ~= "off" ) then
+			G.Print("messages are " .. ( AZSGW2DB.messages and "on" or "off" ) .. ". Use /gw2 messages on or /gw2 messages off.");
+			return;
+		end
+		G.SetMessages(rest == "on");
+		G.Print("messages " .. rest);
 	elseif ( cmd == "debug" ) then
 		for i = 1, table.getn(G.HUD_PARTS) do
 			local p = G.HUD_PARTS[i];

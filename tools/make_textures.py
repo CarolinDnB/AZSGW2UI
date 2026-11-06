@@ -904,6 +904,26 @@ def stat_icons(name="stat_icons.tga"):
     write_tga(name, _block(rgba, S))
 
 
+# ---------------------------------------------------------------- 1.8.1: nameplate / target bar fill
+def plate_fill(name="plate_fill.tga", w=64, h=32):
+    """the fill of the nameplates and of the target bar (own art): a lit, slightly rounded bar in grey that is tinted
+    in game. A bright line under the top edge, a body that darkens towards the bottom, a faint diagonal sheen along the
+    length and a dark line at the very bottom."""
+    rng = np.random.default_rng(23)
+    y = (np.arange(h) + 0.5) / h
+    x = (np.arange(w) + 0.5) / w
+    X, Y = np.meshgrid(x, y)
+    lum = 0.90 - 0.46 * Y
+    lum += 0.22 * np.exp(-(((Y - 0.16) / 0.09) ** 2))
+    lum += 0.06 * np.sin((X * 2.0 + Y * 0.8) * math.pi)
+    lum += (_noise(h, w, (12, 4), rng) - 0.5) * 0.07
+    lum[0, :] += 0.20
+    lum[h - 3:, :] *= 0.62
+    rgba = np.ones((h, w, 4))
+    rgba[..., 0:3] = clamp01(lum)[..., None]
+    write_tga(name, rgba)
+
+
 orb_fill()
 orb_gloss()
 orb_rim()
@@ -920,3 +940,4 @@ bar_icons()
 bar_gold()
 splat()
 stat_icons()
+plate_fill()

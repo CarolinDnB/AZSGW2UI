@@ -1,5 +1,5 @@
 -- AZS GW2 UI: Settings.lua
--- The round icon on the minimap (left click: settings window, right click: unlock / lock the layout)
+-- The round icon on the minimap (left click: settings window)
 -- and the settings window: switches for the parts of this UI, size, moving frames, reset.
 
 local G = AZSGW2;
@@ -11,12 +11,7 @@ local ROWH = 22;
 function G.SetScaleAll(s)
 	s = G.Clamp(s, 0.6, 1.6);
 	AZSGW2DB.scale = s;
-	for i = 1, table.getn(G.all) do
-		G.all[i]:SetScale(s);
-	end
-	for i = 1, table.getn(G.always) do
-		G.always[i]:SetScale(s);
-	end
+	G.ApplyScales();
 	for i = 1, table.getn(G.movables) do
 		if ( G.movables[i].ov ) then
 			G.movables[i].ov:SetScale(s);
@@ -24,8 +19,7 @@ function G.SetScaleAll(s)
 	end
 end
 
--- what each switch is called, reads and does. plates / messages keep their old saved names:
--- true means "show the game's own".
+-- what each switch is called, reads and does. messages keeps its old saved name: true means "show the game's own".
 local ROWS = {
 	{ label = "Damage numbers (GW2 style)", get = function() return G.Opt("dmg"); end,
 		set = function(v) G.SetOpt("dmg", v); G.ApplyDamage(); end },
@@ -55,20 +49,24 @@ local ROWS = {
 		set = function(v) G.SetOpt("revive", v); end },
 	{ label = "GW2 character panel", get = function() return G.Opt("charPanel"); end,
 		set = function(v) G.SetOpt("charPanel", v); end },
+	{ label = "Enable nameplates", get = function() return G.Opt("nameplates"); end,
+		set = function(v) G.SetPlateOpt("nameplates", v); end },
+	{ label = "   only elites and guardians", get = function() return G.Opt("platesElite"); end,
+		set = function(v) G.SetPlateOpt("platesElite", v); end },
+	{ label = "Enable friendly nameplates", get = function() return G.Opt("platesFriend"); end,
+		set = function(v) G.SetPlateOpt("platesFriend", v); end },
+	{ label = "Enemies hit, on the skills", get = function() return G.Opt("hits"); end,
+		set = function(v) G.SetOpt("hits", v); end },
 	{ label = "Damage meter", get = function() return G.Opt("meter"); end,
 		set = function(v) G.SetOpt("meter", v); end },
-	{ label = "Game's enemy nameplates", get = function() return AZSGW2DB.plates and true or false; end,
-		set = function(v) G.SetPlates(v); end },
 	{ label = "Game's centre-screen messages", get = function() return AZSGW2DB.messages and true or false; end,
 		set = function(v) G.SetMessages(v); end },
 };
 
-function G.SetPlates(on)
-	AZSGW2DB.plates = on and true or false;
-	if ( on and ShowNameplates ) then
-		ShowNameplates();
-		NAMEPLATES_ON = 1;
-	end
+-- the nameplate options: the GW2 nameplates (Plates.lua) on the game's own plates, which are switched to match
+function G.SetPlateOpt(key, on)
+	G.SetOpt(key, on);
+	G.EnforcePlates();
 end
 
 function G.SetMessages(on)
@@ -207,7 +205,7 @@ function G.BuildSettings()
 	hint:SetWidth(w - 30);
 	hint:SetHeight(24);
 	hint:SetTextColor(0.65, 0.65, 0.65);
-	hint:SetText("Unlocked: drag the gold boxes anywhere, then lock again. Right-click the minimap icon does the same.");
+	hint:SetText("Unlocked: drag a gold box to move it, its corner or the mouse wheel to resize it, right click puts its size back.");
 	f.hint = hint;
 end
 
@@ -244,7 +242,8 @@ end
 
 function G.ResetPositions()
 	AZSGW2DB.pos = {};
-	G.Print("positions reset, reloading.");
+	AZSGW2DB.fscale = {};
+	G.Print("positions and sizes reset, reloading.");
 	ReloadUI();
 end
 
@@ -278,20 +277,15 @@ function G.BuildMapButton()
 	glow:SetVertexColor(1, 0.9, 0.55, 0);
 	b.glow = glow;
 
-	b:RegisterForClicks("LeftButtonUp", "RightButtonUp");
+	b:RegisterForClicks("LeftButtonUp");
 	b:SetScript("OnClick", function()
-		if ( arg1 == "RightButton" ) then
-			G.ToggleUnlock();
-		else
-			G.ToggleSettings();
-		end
+		G.ToggleSettings();
 	end);
 	b:SetScript("OnEnter", function()
 		glow:SetVertexColor(1, 0.9, 0.55, 0.28);
 		GameTooltip:SetOwner(b, "ANCHOR_LEFT");
 		GameTooltip:AddLine("AZS GW2 UI", G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
 		GameTooltip:AddLine("Left click: settings", 1, 1, 1);
-		GameTooltip:AddLine("Right click: unlock / lock the layout", 1, 1, 1);
 		GameTooltip:Show();
 	end);
 	b:SetScript("OnLeave", function()

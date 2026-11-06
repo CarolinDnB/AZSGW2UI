@@ -23,20 +23,21 @@ Restart the game once (new texture files are only read at start), then enter a w
 | Health orb: only your HP number, centered; the barrier (absorb shield) is a gold layer | `AZS_RUN` hp / sh |
 | Experience: two curved yellow arcs that follow the top of the orb (left arc fills first, then the right one: clockwise), level badge between them | `AZS_RUN` xp / xpn |
 | Resource bar under the orb (rage, combo points, soul shards, Lightwell) | `AZS_RUN` |
-| Skill bar: 3 big slots on each side of the orb on a soft dark smoke, the round chip at the bottom of a slot is the skill's rank (no flashing). The racial sits left of the left three, Talents and Character are two small buttons right of the right three | `AZS_SPELLS`, key bindings |
-| Jewelry plate, buffs / debuffs above the right slots, summons / totems / talent clocks above the left ones | meter API loadout, `GetPlayerBuff*`, `AZS_Get*` |
+| Skill bar: 3 big slots on each side of the orb on a soft dark smoke, the round chip at the bottom of a slot is the skill's rank (no flashing), the one at the top says how many enemies the last cast hit (only shown from 2 on). The racial sits left of the left three, Talents and Character are two small buttons right of the right three | `AZS_SPELLS`, key bindings |
+| Jewelry plate, buffs / debuffs above the right slots, summons / totems above the left ones | meter API loadout, `GetPlayerBuff*`, `AZS_Get*` |
 | Square GW2 minimap: zone plate with local time, zoom buttons and mouse wheel, a golden arrow for you (it turns with the hero), pins for caches, guardian lairs (asleep / awake / empty) and downed friends; far pins stick to the edge | the game's Minimap frame, `AZS_CHESTS`, `AZS_GetLairs`, `AZS_GetPlayerPosition` |
 | Guardian list under the minimap: a skull per guardian, a direction arrow for each and a big one in the header for the nearest | `AZS_GetLairs`, `AZS_GetPlayerPosition` |
 | Boss and guardian bars like the GW2 objective tracker: a red skull, crown and name per enemy, framed debuff icons, a red HP bar with the percentage. With more than one enemy a slim title ("Bosses", "Guardians") sits above them | `AZS_GetBosses`, `AZS_GetGuardians` |
 | Run bar with the difficulty: `NORMAL`, or `HEROIC I` to `HEROIC V` in orange, the affixes (Bolstering, Sanguine, Explosive) at the right end of the line under the bar | `AZS_ZONE` heroic / affixes |
 | Kills / gold / cache strip with the kills per minute as `[18/m]` (tooltip: run average and last minute) | `AZS_RUN`, run clock |
 | GW2 damage numbers: small white numbers with a thin dark outline, bigger ones with a red blot behind them for crits, smaller for damage-over-time ticks and pets, grey words for misses; they follow the enemy and shrink with distance. All numbers, only crits or none; ticks on or off | world-anchored combat text API |
-| Target bar for what you target: a red bar for enemies, a **green** one for friends (class-coloured name, "Downed" when down); shows at once on the click, exact numbers follow | client target, `AZS_TARGET`, `AZS_UNITS` |
-| Damage meter with the spell icon left of each name, Healing / Boss / Party tabs. On the Party tab the icon is each player's best spell. `10s DPS` is the damage of the last 10 seconds; the **Reset** button starts all four tabs from zero again | meter API (totals, spell icons) |
+| Target bar for what you target, built like Guild Wars 2's: a wide flat bar with a glossy fill and a dark frame, the name inside on the left, the health and the percent inside on the right, a round badge at the right end (a crown for elites, a small skull otherwise). Red for enemies, gold for elites, **green** for friends (class-coloured name, "Downed" when down); shows at once on the click, exact numbers follow | client target, `AZS_TARGET`, `AZS_UNITS` |
+| Nameplates in the same style (off by default): a small glossy bar with the name below it, the health inside for your target, a white outline on the target's plate, a crown or skull mark for elites and bosses. Options: all enemies or only elites and guardians, friendly plates on or off | the game's own nameplates (skinned), `AZS_TARGET`, `AZS_UNITS`, `AZS_UnitKind` |
+| Damage meter with the spell icon left of each name, Healing / Boss / Party tabs. On the Party tab the icon is each player's best spell. `10s DPS` is the damage of the last 10 seconds, pets, summons and totems included; the **Reset** button starts all four tabs from zero again | meter API (totals, spell icons) |
 | Co-op party frames with portrait, HP, percent, buffs and the **barrier** (see below). Click a frame to target that friend (a white outline marks your target), right click for a small menu of ours: Inspect, Trade, Follow, Whisper (and Make leader / Remove for the party leader) | party units, `AZS_GetDownedPartyMembers` |
 | Ally down alert in co-op: "NAME is down!  Revive them!" in a red banner, an arrow that points to the body, the distance, a marker over the body in the world and a short sound; it goes when they get up | `AZS_GetDownedPartyMembers`, world anchors |
 | Hero panel (replaces the character window): every piece of gear in a column beside the character model, name and "Level N Race Class", an **Attributes** panel with every stat grouped under Offense / Defense / Utility (icon, name, value; green when gear adds to it; the tooltip shows the raw value), accessories (neck, rings, trinkets) and the weapons you hold | `AZS_STATS`, `AZS_ZONE`, `AZS_RUN`, the inventory functions |
-| Round icon on the minimap: left click = settings window, right click = unlock / lock the layout | |
+| Round icon on the minimap: click = settings window | |
 
 **Barrier on the party frames.** The API gives the shield amount for your own hero only (`AZS_RUN.sh`). For friends it is
 read from what the client reports: health above the maximum is drawn as a gold layer **on top of** the health bar with a
@@ -46,8 +47,9 @@ wards, Sacrifice) puts a fainter gold layer over the health when no amount is kn
 
 **Meter reset.** The game's counters cannot be cleared from an addon, so Reset remembers every line's amount at that moment and
 shows the difference from then on (the game's own meter window keeps its numbers). It ends by itself when a new run starts or a
-counter goes down (a new boss fight). The 10 second rate is worked out in the addon from the totals it sees (a short
-history, no extra game calls), and it counts from the reset point.
+counter goes down (a new boss fight). The 10 second rate comes from the meter API (one small question a second, counted from the reset point). If the game cannot
+answer, the addon works it out from the totals it sees; a line that drops out of the list (a pet that dies, a summon that
+ends) no longer starts that count over.
 
 **Attribute formats.** Chances and shares are fractions in the API (0.4 = 40%) and are shown as percent, multipliers as
 `x3.04` (= 304% of the normal value, the tooltip says so), regeneration as `/s`. Cooldowns are shown as the reduction:
@@ -55,7 +57,7 @@ the API gives a multiplier (0.62), the panel shows `CDR 38%` (the tooltip says "
 
 Hidden while this UI is on: the game's clock, boss bars, tally, spells and jewelry rows, meter, Level Up! button, banners,
 minimap flag and local clock (`AZS_SetHudShown`, asserted again every half second), the stock player / party / target
-frames, buff frames, enemy nameplates, the stock minimap decorations and every piece of the stock action bar, the game's own
+frames, buff frames, the stock minimap decorations and every piece of the stock action bar, the game's own
 damage numbers (`CombatDamage`), the boss loot notice and the centre-screen messages. If a popup the game draws itself
 survives anyway, the addon looks for the frame that shows the same text as each banner that comes, hides it and says so in
 the chat ("hid the game's own popup (name)"). That search is small on purpose: only frames that are on screen at that moment
@@ -65,7 +67,7 @@ the chat ("hid the game's own popup (name)"). That search is small on purpose: o
 ## Settings and moving things
 
 Click the round icon at the minimap (or `/gw2 config`): switches for every part, size, "Unlock layout", "Reset positions".
-Unlocked, every frame gets a gold box with its name: drag it anywhere, then lock again.
+Unlocked, every frame gets a gold box with its name and size: drag it to move it, drag its corner (or use the mouse wheel) to make just that part bigger or smaller, right click puts its size back. A bar at the top of the screen locks the layout again. "Size" in the settings is still the size of everything at once; the single sizes are on top of it. Parts that belong together (the orb and its skill bar, for example) resize together.
 
 ## Commands
 
@@ -75,7 +77,10 @@ Unlocked, every frame gets a gold box with its name: drag it anywhere, then lock
     /gw2 scale 0.6-1.6                size of everything
     /gw2 reset                        forget moved frames (reloads)
     /gw2 mapyards <number|off>        yards across the minimap, if the pins are off from the map
-    /gw2 plates on | off              the game's enemy nameplates (off by default)
+    /gw2 plates on | off              the GW2 style nameplates (off by default)
+    /gw2 plates elite on | off        only elites and guardians
+    /gw2 plates friends on | off      friendly nameplates
+    /gw2 plates debug                 what the nameplate frames look like, if no plate is recognised
     /gw2 messages on | off            the game's own centre-screen messages (off by default)
     /gw2 art custom | stock           generated textures / plain colours (reloads)
     /gw2 hide <FrameName>             keep one more of the game's frames hidden
@@ -127,8 +132,15 @@ Unlocked, every frame gets a gold box with its name: drag it anywhere, then lock
 - Right click on a party frame shows no menu or Inspect does nothing: the chat says why ("too far away to inspect (about 28 yards)", "Inspect is not available in this game version", or "party menu failed" with the reason).
 - No barrier on a friend: `/gw2 party` shows their health and buffs; a shield the client does not report cannot be drawn.
 - The Talents or Character button opens the wrong thing: `/gw2 bindings`, then `/gw2 bind talents <BINDING>`.
-- Enemy nameplates still show: `/gw2 plates off`. Normal enemies' HP is not part of the AZS API (only your target's is), so
-  one plate per enemy is not possible; the target bar covers the one you target.
+- Nameplates look like the game's old ones: the skin needs the game's plate frames to look the way they do in the standard
+  1.12 client. If they do not, nothing is hidden and the game's plates show as before; `/gw2 plates debug` prints what it finds,
+  please send that. Plain enemies show no number, elites show their percent, your target shows the exact health (the AZS API gives
+  exact health for the target and for special enemies only). Only the target can be told apart from guardians, other
+  guardians look like elites.
+- Nameplates and the V key: the game's key now works as usual; our options decide what the plates look like. `/gw2 plates off`
+  gives the game's own plates back.
+- The number on top of a skill (enemies hit) is counted from the hits you see in the damage numbers, per cast. It is not the
+  ability's maximum number of targets. Switch it off with "Enemies hit, on the skills" in the settings.
 - A freeze or a black screen: try `/gw2 hunt off` and `/gw2 off` to see whether the addon is involved at all, and report what
   it happened next to together with `/gw2 debug`.
 
@@ -142,6 +154,16 @@ load it, the game's own font is used.
 This is a fan made interface for Azeroth Survivors. It is not affiliated with or endorsed by ArenaNet, NCSOFT or Blizzard;
 "Guild Wars" is a trademark of ArenaNet / NCSOFT. The layout is inspired by Guild Wars 2's interface; all textures, icons and
 code here are original.
+
+## Changes in 1.8.1
+
+- The minimap icon only opens the settings window (right click removed: it left you in the unlocked layout).
+- Talent procs above the left skills are gone (they showed empty icons).
+- Every part can be resized on its own in the unlocked layout (corner, mouse wheel, right click to reset); a lock bar sits at the top.
+- Nameplates in the Guild Wars 2 style, with options for all enemies / only elites and guardians / friendly plates. The game's V key no longer gets undone half a second later.
+- A new target bar in the style of Guild Wars 2.
+- A small number on top of each skill shows how many enemies the last cast hit.
+- The 10 second DPS no longer stops after a few seconds on pet builds.
 
 ## Changes in 1.8.0
 

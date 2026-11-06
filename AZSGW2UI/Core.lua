@@ -60,7 +60,8 @@ G.HUD_MAP_PARTS = { "flag", "localClock" };
 -- options (Settings window): what a missing value means
 G.OPTDEF = {
 	dmg = true, dmgPet = true, dmgCrit = false, dmgTicks = true, dmgNative = false, minimap = true, pinChest = true, pinGuard = true, arrows = true,
-	target = true, party = true, revive = true, meter = true, guardians = true, charPanel = true,
+	target = true, party = true, revive = true, meter = true, guardians = true, charPanel = true, hits = true,
+	nameplates = false, platesElite = false, platesFriend = false,
 };
 
 G.art = { custom = true };
@@ -68,6 +69,8 @@ G.movables = {};
 G.always = {};       -- frames that stay up outside a run (minimap, settings icon): scaled, never hidden
 G.all = {};          -- every top level frame (for /gw2 scale)
 G.containers = {};   -- frames shown / hidden as a whole with the run
+G.movableOf = {};    -- frame -> key, for every frame the player can move
+G.groupOf = nil;     -- frame -> key of the movable frame it hangs off (built once everything exists)
 G.updaters = {};
 G.hiddenByUs = {};
 
@@ -242,17 +245,37 @@ end
 
 ------------------------------------------------------------------------ frames
 
+-- Size: the global size (/gw2 scale, the settings window) times the frame's own size. A frame's own size
+-- is kept per movable frame (AZSGW2DB.fscale[key]) and applies to everything that hangs off it, so the
+-- whole skill bar grows as one.
+G.FSCALE_MIN = 0.5;
+G.FSCALE_MAX = 2.0;
+
+function G.FrameScale(key)
+	local t = AZSGW2DB and AZSGW2DB.fscale;
+	local v = t and key and t[key];
+	if ( type(v) == "number" and v > 0 ) then
+		return v;
+	end
+	return 1;
+end
+
+function G.ScaleFor(frame)
+	local base = AZSGW2DB and AZSGW2DB.scale or 1;
+	return base * G.FrameScale(G.groupOf and G.groupOf[frame]);
+end
+
 function G.Register(frame, conditional)
 	table.insert(G.all, frame);
 	if ( not conditional ) then
 		table.insert(G.containers, frame);
 	end
-	frame:SetScale(AZSGW2DB and AZSGW2DB.scale or 1);
+	frame:SetScale(G.ScaleFor(frame));
 end
 
 function G.RegisterAlways(frame)
 	table.insert(G.always, frame);
-	frame:SetScale(AZSGW2DB and AZSGW2DB.scale or 1);
+	frame:SetScale(G.ScaleFor(frame));
 end
 
 function G.AddUpdater(name, fn, interval)
@@ -469,6 +492,53 @@ function G.NewBar(parent, w, h, r, g, b)
 	return f;
 end
 
+-- The health bar of the target bar and the nameplates (1.8.1): a black outline, a dark red track (the part of the
+-- bar that is gone), and a lit fill that is tinted in game. The fill is cropped, not squeezed, as it shortens.
+function G.NewGwBar(parent, w, h)
+	local f = CreateFrame("Frame", nil, parent);
+	f:SetWidth(w);
+	f:SetHeight(h);
+	local back = G.Solid(f, "BACKGROUND", 0.02, 0.02, 0.02, 0.94);
+	back:SetAllPoints(f);
+	local track = G.Solid(f, "BACKGROUND", 0.19, 0.05, 0.05, 1);
+	track:SetPoint("TOPLEFT", f, "TOPLEFT", 1, -1);
+	track:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, 1);
+	f.track = track;
+	local fill = f:CreateTexture(nil, "BORDER");
+	fill:SetTexture(G.art.custom and ( G.TEXPATH .. "plate_fill.tga" ) or G.WHITE);
+	fill:SetPoint("TOPLEFT", f, "TOPLEFT", 1, -1);
+	fill:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 1, 1);
+	fill:SetWidth(1);
+	fill:Hide();
+	f.fill = fill;
+	G.Edges(f, 0, 0, 0, 1, 1, "ARTWORK");
+	f.SetFrac = function(self, frac)
+		frac = G.Clamp(tonumber(frac) or 0, 0, 1);
+		local width = ( self:GetWidth() or 0 ) - 2;
+		if ( self.lastFrac == frac and self.lastWidth == width ) then
+			return;
+		end
+		self.lastFrac, self.lastWidth = frac, width;
+		if ( frac <= 0.002 or width <= 0 ) then
+			self.fill:Hide();
+			return;
+		end
+		self.fill:SetWidth(width * frac);
+		if ( G.art.custom ) then
+			self.fill:SetTexCoord(0, frac, 0, 1);
+		end
+		self.fill:Show();
+	end;
+	f.SetColor = function(self, cr, cg, cb)
+		if ( self.cr == cr and self.cg == cg and self.cb == cb ) then
+			return;
+		end
+		self.cr, self.cg, self.cb = cr, cg, cb;
+		self.fill:SetVertexColor(cr, cg, cb, 1);
+	end;
+	return f;
+end
+
 ------------------------------------------------------------------------ tooltips / dragging
 
 function G.Tooltip(frame, func, anchor)
@@ -530,11 +600,135 @@ function G.Movable(frame, key, label, tl, br, mouse)
 		end);
 	end
 	G.ApplyPos(frame, key);
+	G.movableOf[frame] = key;
 	return m;
+end
+
+function G.MovableByKey(key)
+	for i = 1, table.getn(G.movables) do
+		if ( G.movables[i].key == key ) then
+			return G.movables[i];
+		end
+	end
+	return nil;
+end
+
+-- Which movable frame does a frame hang off? Follow its first anchor up until a movable frame is met.
+local function RootOf(frame)
+	local cur = frame;
+	for depth = 1, 12 do
+		local key = G.movableOf[cur];
+		if ( key ) then
+			return key;
+		end
+		local _, rel = cur:GetPoint();
+		if ( not rel or rel == UIParent or rel == WorldFrame ) then
+			return nil;
+		end
+		cur = rel;
+	end
+	return nil;
+end
+
+function G.BuildGroups()
+	G.groupOf = {};
+	for i = 1, table.getn(G.all) do
+		local key = RootOf(G.all[i]);
+		if ( key ) then
+			G.groupOf[G.all[i]] = key;
+		end
+	end
+	for i = 1, table.getn(G.always) do
+		local key = RootOf(G.always[i]);
+		if ( key ) then
+			G.groupOf[G.always[i]] = key;
+		end
+	end
+end
+
+function G.ApplyScales()
+	if ( not G.groupOf ) then
+		G.BuildGroups();
+	end
+	for i = 1, table.getn(G.all) do
+		G.all[i]:SetScale(G.ScaleFor(G.all[i]));
+	end
+	for i = 1, table.getn(G.always) do
+		G.always[i]:SetScale(G.ScaleFor(G.always[i]));
+	end
+end
+
+local function SizeText(key)
+	return string.format("%d%%", math.floor(G.FrameScale(key) * 100 + 0.5));
+end
+
+-- one movable frame (and everything on it) to a new own size; its anchor stays where it is on the screen
+function G.SetFrameScale(key, v)
+	local m = G.MovableByKey(key);
+	if ( not m or type(v) ~= "number" or v ~= v ) then
+		return;
+	end
+	v = math.floor(G.Clamp(v, G.FSCALE_MIN, G.FSCALE_MAX) * 100 + 0.5) / 100;
+	local old = G.FrameScale(key);
+	if ( v == old ) then
+		return;
+	end
+	AZSGW2DB.fscale = AZSGW2DB.fscale or {};
+	if ( v > 0.995 and v < 1.005 ) then
+		AZSGW2DB.fscale[key] = nil;
+	else
+		AZSGW2DB.fscale[key] = v;
+	end
+	G.ApplyScales();
+	local point, rel, relPoint, x, y = m.frame:GetPoint();
+	if ( point and ( not rel or rel == UIParent ) and type(x) == "number" and type(y) == "number" ) then
+		m.frame:ClearAllPoints();
+		m.frame:SetPoint(point, UIParent, relPoint or point, x * old / v, y * old / v);
+		G.SavePos(m);
+	end
+	if ( m.ov and m.ov.size ) then
+		m.ov.size:SetText(SizeText(key));
+	end
+end
+
+-- a bar at the top of the screen while the layout is unlocked: the way out is always in plain sight
+local function LockBar()
+	if ( G.lockBar ) then
+		return G.lockBar;
+	end
+	local b = CreateFrame("Button", "AZSGW2LockBar", UIParent);
+	b:SetWidth(440);
+	b:SetHeight(38);
+	b:SetPoint("TOP", UIParent, "TOP", 0, -8);
+	b:SetFrameStrata("FULLSCREEN_DIALOG");
+	b:SetFrameLevel(60);
+	b.azs = true;
+	local bg = G.Solid(b, "BACKGROUND", 0.05, 0.05, 0.06, 0.95);
+	bg:SetAllPoints(b);
+	G.Edges(b, G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 0.95, 1, "BORDER");
+	local t1 = G.Text(b, 12, "CENTER");
+	t1:SetPoint("TOP", b, "TOP", 0, -5);
+	t1:SetTextColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+	t1:SetText("Layout unlocked. Click here to lock it.");
+	local t2 = G.Text(b, 9, "CENTER");
+	t2:SetPoint("BOTTOM", b, "BOTTOM", 0, 5);
+	t2:SetTextColor(0.75, 0.75, 0.75);
+	t2:SetText("drag a gold box = move   |   its corner or the mouse wheel = size   |   right click = reset its size");
+	b:SetScript("OnClick", function()
+		G.ToggleUnlock();
+	end);
+	b:Hide();
+	G.lockBar = b;
+	return b;
 end
 
 function G.SetUnlocked(on)
 	G.unlocked = on and true or false;
+	if ( on ) then
+		LockBar():Show();
+	elseif ( G.lockBar ) then
+		G.lockBar:Hide();
+	end
 	for i = 1, table.getn(G.movables) do
 		local m = G.movables[i];
 		if ( on and not m.ov ) then
@@ -552,11 +746,68 @@ function G.SetUnlocked(on)
 			bg:SetAllPoints(ov);
 			G.Edges(ov, G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 0.95, 1, "BORDER");
 			local t = G.Text(ov, 11, "CENTER");
-			t:SetPoint("CENTER", ov, "CENTER", 0, 0);
+			t:SetPoint("CENTER", ov, "CENTER", 0, 5);
 			t:SetText(m.label);
+			local sz = G.Text(ov, 9, "CENTER");
+			sz:SetPoint("CENTER", ov, "CENTER", 0, -7);
+			sz:SetTextColor(0.9, 0.85, 0.65);
+			sz:SetText(SizeText(m.key));
+			ov.size = sz;
 			ov:SetScale(AZSGW2DB and AZSGW2DB.scale or 1);
 			ov:EnableMouse(true);
 			ov:RegisterForDrag("LeftButton");
+			-- size: the mouse wheel over the box, a right click puts the size back, the corner grip is dragged
+			ov:EnableMouseWheel(true);
+			ov:SetScript("OnMouseWheel", function()
+				local d = arg1 or 0;
+				if ( d > 0 ) then
+					G.SetFrameScale(m.key, G.FrameScale(m.key) + 0.05);
+				elseif ( d < 0 ) then
+					G.SetFrameScale(m.key, G.FrameScale(m.key) - 0.05);
+				end
+			end);
+			ov:SetScript("OnMouseUp", function()
+				if ( arg1 == "RightButton" ) then
+					G.SetFrameScale(m.key, 1);
+				end
+			end);
+			local grip = CreateFrame("Frame", nil, ov);
+			grip:SetWidth(14);
+			grip:SetHeight(14);
+			grip:SetPoint("BOTTOMRIGHT", ov, "BOTTOMRIGHT", 0, 0);
+			grip:SetFrameLevel(ov:GetFrameLevel() + 2);
+			grip:EnableMouse(true);
+			local gb = G.Solid(grip, "ARTWORK", G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 0.95);
+			gb:SetAllPoints(grip);
+			local g1 = G.Solid(grip, "OVERLAY", 0.12, 0.09, 0.03, 0.95);
+			g1:SetPoint("BOTTOMRIGHT", grip, "BOTTOMRIGHT", -2, 2);
+			g1:SetWidth(8);
+			g1:SetHeight(2);
+			local g2 = G.Solid(grip, "OVERLAY", 0.12, 0.09, 0.03, 0.95);
+			g2:SetPoint("BOTTOMRIGHT", grip, "BOTTOMRIGHT", -2, 2);
+			g2:SetWidth(2);
+			g2:SetHeight(8);
+			grip:SetScript("OnMouseDown", function()
+				if ( arg1 and arg1 ~= "LeftButton" ) then
+					return;
+				end
+				local cx, cy = GetCursorPosition();
+				local base = G.FrameScale(m.key);
+				-- the box measured in the cursor's own units, so dragging its width makes it twice as big
+				local w = math.max(( ov:GetWidth() or 0 ) * ( ov:GetEffectiveScale() or 1 ), 40);
+				grip:SetScript("OnUpdate", function()
+					local x, y = GetCursorPosition();
+					local d = ( ( x - cx ) - ( y - cy ) ) / 2;
+					G.SetFrameScale(m.key, base * ( w + d ) / w);
+				end);
+			end);
+			grip:SetScript("OnMouseUp", function()
+				grip:SetScript("OnUpdate", nil);
+			end);
+			grip:SetScript("OnHide", function()
+				grip:SetScript("OnUpdate", nil);
+			end);
+			ov.grip = grip;
 			ov:SetScript("OnDragStart", function()
 				m.frame:StartMoving();
 			end);
@@ -651,25 +902,51 @@ function G.EnforceHud()
 	end
 end
 
+-- The game's own nameplates are switched once to what the options say: when this UI starts, when a world loads (the
+-- game forgets them then) and when an option changes. They are not fought afterwards, so a player who presses the
+-- game's own key for them gets them (before 1.8.1 they were switched off again within a second).
+-- G.platesApplied / G.friendApplied: nil = not looked at yet, true = switched on by us, false = switched off by us.
+function G.EnforcePlates()
+	local want = G.Opt("nameplates") and true or false;
+	if ( G.platesApplied ~= want ) then
+		G.platesApplied = want;
+		if ( want ) then
+			if ( ShowNameplates ) then
+				ShowNameplates();
+			end
+			NAMEPLATES_ON = 1;
+		else
+			if ( HideNameplates ) then
+				HideNameplates();
+			end
+			NAMEPLATES_ON = nil;
+		end
+	end
+	local friend = G.Opt("platesFriend") and true or false;
+	if ( G.friendApplied ~= friend ) then
+		local was = G.friendApplied;
+		G.friendApplied = friend;
+		if ( friend ) then
+			if ( ShowFriendNameplates ) then
+				ShowFriendNameplates();
+			end
+			FRIENDNAMEPLATES_ON = 1;
+		elseif ( was ) then
+			if ( HideFriendNameplates ) then
+				HideFriendNameplates();
+			end
+			FRIENDNAMEPLATES_ON = nil;
+		end
+	end
+end
+
 function G.EnforceHidden()
 	if ( not AZSGW2DB or not AZSGW2DB.enabled ) then
 		return;
 	end
 	G.EnforceHud();
 	G.QuietMessages(not AZSGW2DB.messages);
-	if ( not AZSGW2DB.plates ) then
-		-- enemy nameplates: switched off once, and again only when the game switches them on (it sets
-		-- NAMEPLATES_ON); with hundreds of enemies around the game's own call is not something to run twice a second
-		if ( NAMEPLATES_ON or not G.platesOff ) then
-			if ( HideNameplates ) then
-				HideNameplates();
-			end
-			NAMEPLATES_ON = nil;
-			G.platesOff = true;
-		end
-	else
-		G.platesOff = false;
-	end
+	G.EnforcePlates();
 	for i = 1, table.getn(G.DEFAULT_HIDE) do
 		G.KeepHidden(G.DEFAULT_HIDE[i]);
 	end
@@ -730,11 +1007,19 @@ end
 
 function G.RestoreHidden()
 	G.QuietMessages(false);
-	if ( ShowNameplates and not AZSGW2DB.plates ) then
-		ShowNameplates();
-		NAMEPLATES_ON = 1;
+	if ( G.platesApplied == false ) then
+		if ( ShowNameplates ) then
+			ShowNameplates();
+		end
+		NAMEPLATES_ON = 1;                           -- the game's own nameplates are back, as they were
 	end
-	G.platesOff = false;
+	if ( G.friendApplied == true ) then
+		if ( HideFriendNameplates ) then
+			HideFriendNameplates();
+		end
+		FRIENDNAMEPLATES_ON = nil;
+	end
+	G.platesApplied, G.friendApplied = nil, nil;
 	if ( G.mmAttached and G.DetachMinimap ) then
 		G.DetachMinimap();
 	end
