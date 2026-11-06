@@ -212,7 +212,15 @@ impl.AddLine = function(self, t, r, g, b)
 	if r ~= nil then needNum("AddLine color", r, g, b) end
 	table.insert(tipLines, t)
 end
-spellTipText = {}      -- book index -> the lines of the game's spell tooltip (for the scan tooltip)
+local tipStore = {}
+-- book index -> the lines of the game's spell tooltip (for the scan tooltip). The text of a tooltip only changes when the
+-- hero's upgrades do, and the game says so with a new stats stamp: a change here is made like that.
+spellTipText = setmetatable({}, { __index = tipStore, __newindex = function(t, k, v)
+	tipStore[k] = v
+	-- (the stats themselves are left alone: the addon is told its remembered numbers are out of date, as a new number would)
+	if AZSGW2 and AZSGW2.tgtSeen then AZSGW2.tgtSeen.statSig = "other" end
+	AZS_STATS_UPDATED = (AZS_STATS_UPDATED or 0) + 1
+end })
 scanCalls = 0
 scanBlind = false      -- the game writes the numbers of the hero only into the tooltip a player sees (a hover), not into a look
 impl.SetOwner = function(self, f, a)
@@ -1829,7 +1837,7 @@ scenario("skills: the most targets a skill can hit, from its tooltip", function(
 	assert(frost.hitText.text == "4")
 	spellTipText[2] = { "Frostbolt", "Hurls the 6 nearest enemies." }
 	AZS_STATS_UPDATED = ( AZS_STATS_UPDATED or 0 ) + 1
-	runTicks(8, 0.1)
+	runTicks(20, 0.1)    -- one skill is read per look (4 a second), seven skills: everything is up to date within two seconds
 	assert(frost.hitText.text == "6", "chip did not follow the card: " .. tostring(frost.hitText.text))
 	-- colour codes in the text do not hide the number
 	spellTipText[2] = { "Frostbolt", "Hurls the |cffffd1005|r nearest enemies for |cff00ff00300|r damage." }
@@ -1950,6 +1958,112 @@ scenario("skills: tooltips of pet abilities, and the timer ticks while hovering"
 	AZS_SPELLS[4].cd = 0; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
 	runTicks(6, 0.05)
 	print("pet tooltips and the live timer ok")
+end)
+
+scenario("skills: a ready skill that cannot be used does not flash", function()
+	local b = G.slots[4]
+	local keep = AZS_SPELLS[4]
+	AZS_SPELLS[4] = { key = "blizzard", spell = 4, rank = 1, cd = 0, cdmax = 10 }
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(10, 0.05)
+	assert(not b.cd.shown and b.cdText.text == "", "starts ready")
+	-- nothing is in range: every try puts a moment of cooldown on the skill and takes it off again
+	local flips, last = 0, false
+	for i = 1, 80 do
+		AZS_SPELLS[4].cd = ( i % 2 == 1 ) and ( 0.3 + ( i % 5 ) * 0.3 ) or 0
+		AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+		runTicks(3, 0.05)
+		local now = b.cd.shown and true or false
+		if now ~= last then flips = flips + 1; last = now end
+		assert(b.cdText.text == "", "the cooldown text flashed on a ready skill: " .. tostring(b.cdText.text))
+	end
+	assert(flips == 0, "the cooldown overlay flashed " .. flips .. " times")
+	-- a real cooldown (the skill went off) shows at once, and counts down through updates that are short ones
+	AZS_SPELLS[4].cd = 10; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(3, 0.05)
+	assert(b.cd.shown and b.cdText.text ~= "", "a real cooldown is not shown")
+	AZS_SPELLS[4].cd = 1.5; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1      -- the game's number for the same cooldown, later
+	runTicks(3, 0.05)
+	assert(b.cd.shown and b.cdText.text ~= "", "the end of a real cooldown was taken for a blip")
+	AZS_SPELLS[4].cd = 0; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(3, 0.05)
+	assert(not b.cd.shown and b.cdText.text == "", "ready again")
+	-- a skill seen for the first time, already cooling down, shows its cooldown
+	AZS_SPELLS[4] = { key = "newskill", spell = 4, rank = 1, cd = 1.2, cdmax = 10 }
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(3, 0.05)
+	assert(b.cd.shown, "a new skill with a cooldown shows none")
+	AZS_SPELLS[4] = keep; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(10, 0.05)
+	-- the cost: cooldown changes (every cast) do not make the tooltips be read again
+	local c0 = scanCalls
+	for i = 1, 100 do
+		AZS_SPELLS[4].cd = ( i % 2 ) * 3
+		AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+		runTicks(2, 0.1)
+	end
+	AZS_SPELLS[4].cd = 0; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	assert(scanCalls - c0 <= 16, "skills read " .. ( scanCalls - c0 ) .. " times in 20 seconds of casting")
+	print("no flashing, no needless reads")
+end)
+
+scenario("tooltips: a buff the game has no text for still has one", function()
+	runTicks(8, 0.1)
+	local a = G.buffs[1]
+	assert(a.shown and a.data, "no buff shown")
+	-- the game gives no text for it (a buff of the hero that has no description)
+	GameTooltip.SetPlayerBuff = function(self, idx) self.tipText = nil end
+	a.scripts.OnEnter()
+	assert(#tipLines >= 1 and tipLines[1] == "Regeneration", "no name on a buff without text: " .. table.concat(tipLines, " | "))
+	assert(GameTooltip.shown and G.tipLast and G.tipLast.floor == true and G.tipLast.tag == "aura", "the fallback was not used")
+	a.scripts.OnLeave()
+	-- the loadout knows what the icon is called
+	G.iconNames["interface\\icons\\spell_nature_regeneration"] = "Rockbiter Weapon"
+	a.scripts.OnEnter()
+	assert(tipLines[1] == "Rockbiter Weapon", "the loadout's name was not used: " .. tostring(tipLines[1]))
+	a.scripts.OnLeave()
+	G.iconNames = {}
+	-- when the game does have text, it is the game's
+	GameTooltip.SetPlayerBuff = function(self, idx) self.tipText = { "Rejuvenation" }; tipLines = { "Rejuvenation" } end
+	GameTooltip.NumLines = function(self) return self.tipText and #self.tipText or 0 end
+	a.scripts.OnEnter()
+	assert(tipLines[1] == "Rejuvenation" and G.tipLast.floor == false, "the game's text was replaced")
+	a.scripts.OnLeave()
+	GameTooltip.SetPlayerBuff = nil
+	GameTooltip.NumLines = nil
+	-- /gw2 focus and /gw2 rows (what is under the mouse, where the game draws its skill icons) run in any state
+	SlashCmdList["AZSGW2"]("focus")
+	local mf = GetMouseFocus
+	GetMouseFocus = function() return G.slots[1] end
+	SlashCmdList["AZSGW2"]("focus")
+	GetMouseFocus = function() return a end
+	SlashCmdList["AZSGW2"]("focus")
+	GetMouseFocus = mf
+	SlashCmdList["AZSGW2"]("rows")
+	SlashCmdList["AZSGW2"]("debug")
+	print("buff tooltip fallback ok")
+end)
+
+scenario("/gw2 off: the game's skill rows are switched off and on again", function()
+	local log = {}
+	local orig = AZS_SetHudShown
+	AZS_SetHudShown = function(p, s) if p == "build" then log[#log + 1] = tostring(s) end orig(p, s) end
+	SlashCmdList["AZSGW2"]("off")
+	runTicks(4, 0.05)
+	assert(table.concat(log, ",") == "true", "given back at once: " .. table.concat(log, ","))
+	runTicks(20, 0.05)
+	assert(table.concat(log, ","):find("true,false,true", 1, true), "not switched off and on again: " .. table.concat(log, ","))
+	assert(hud.build == true and cvars.hudBuild == "1", "the rows are left off after the second switch")
+	runTicks(80, 0.05)
+	assert(hud.build == true and cvars.hudBuild == "1", "the rows are off after the watch")
+	local n = #log
+	runTicks(120, 0.05)
+	assert(#log == n, "the rows are switched for ever")
+	AZS_SetHudShown = orig
+	SlashCmdList["AZSGW2"]("on")
+	runTicks(14, 0.05)
+	for _, p in ipairs(G.HUD_PARTS) do assert(hud[p] == false, "HUD part not hidden again: " .. p) end
+	print("/gw2 off switches the rows off and on:", table.concat(log, ","))
 end)
 
 scenario("cooldown counts down", function()

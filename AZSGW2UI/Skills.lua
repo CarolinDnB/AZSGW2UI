@@ -22,6 +22,8 @@ local STATUSROW = 6;   -- 6 x 24 + 5 x 2 = 154 px: as wide as the left three slo
 
 G.slots = {};
 G.abilityInfo = {};
+G.iconNames = {};      -- icon path (lower case) -> name, from the loadout
+G.spellNames = {};     -- spell id -> name, from the loadout
 G.jewelry = {};
 G.cdEnd = nil;
 G.lastSpellStamp = nil;
@@ -49,8 +51,20 @@ function G.RefreshLoadout()
 	G.loadoutStamp = stamp;
 
 	local info = {};
+	local iconNames, spellNames = {}, {};
 	local sources = lo.sources or {};
 	for key, src in pairs(sources) do
+		-- what a thing is called, by its icon and by its spell id: a buff the game has no tooltip text for is named from these
+		if ( src.name ) then
+			if ( src.icon and src.icon.status == "ready" and src.icon.path ) then
+				iconNames[string.lower(tostring(src.icon.path))] = src.name;
+			end
+			if ( type(src.spellIds) == "table" ) then
+				for _, id in pairs(src.spellIds) do
+					spellNames[tonumber(id) or 0] = src.name;
+				end
+			end
+		end
 		if ( src.abilityKey ) then
 			local icon = nil;
 			if ( src.icon and src.icon.status == "ready" ) then
@@ -63,6 +77,7 @@ function G.RefreshLoadout()
 		end
 	end
 	G.abilityInfo = info;
+	G.iconNames, G.spellNames = iconNames, spellNames;
 
 	local jew = {};
 	local list = lo.runJewelry or {};
@@ -88,6 +103,7 @@ local function NewSlot(size, hasCooldown, ranked)
 	b:SetHeight(size);
 	b:SetFrameStrata("HIGH");   -- above the game's own HUD frames, so hovering and clicking always reach us
 	b.size = size;
+	b.tipTag = "skill";
 
 	local icon = b:CreateTexture(nil, "BACKGROUND");
 	icon:SetPoint("TOPLEFT", b, "TOPLEFT", 3, -3);
@@ -250,6 +266,10 @@ local function SetEmpty(b)
 	b.tgtKey = nil;
 end
 
+local BLIP_MAX = 2;            -- seconds: a cooldown this short, begun on a ready skill, may be a failed try
+local BLIP_FRAC = 0.6;            -- ... when it is also this much less than the skill's full cooldown
+local CD_MIN = 0.3;               -- a cooldown with less than this left is not drawn
+
 local function SetSpell(b, entry)
 	b.entry = entry;
 	if ( b.curIcon == "empty" ) then
@@ -262,7 +282,7 @@ local function SetSpell(b, entry)
 
 	local rem = G.SpellRemaining(entry, G.skillNow);
 	local cdmax = G.Num(entry.cdmax);
-	if ( rem > 0.05 and cdmax > 0 ) then
+	if ( rem > CD_MIN and cdmax > 0 ) then
 		if ( b.cd ) then
 			local h = math.max(1, math.floor((b.size - 6) * G.Clamp(rem / cdmax, 0, 1) + 0.5));
 			if ( b.cdH ~= h ) then
@@ -387,7 +407,14 @@ local function SpellTooltip(tt, b)
 	b.tipRem = rem;                  -- what the tooltip says now: it is drawn again while the time counts down (see G.Tooltip)
 	G.hoverSlot = b;                 -- the number of targets in this tooltip is read for the chip (see UpdateTargets)
 	-- the game's own spell tooltip when the spell is in a spellbook
-	local idx, book = FindSpell(e);
+	local idx, book = nil, nil;
+	local want = tostring(e.key) .. "/" .. tostring(e.rank);
+	if ( G.tipRefill and b.tipFor == want ) then
+		idx, book = b.tipIdx, b.tipBook;     -- the tooltip is only drawn again (its timer): the spellbook is not searched again
+	else
+		idx, book = FindSpell(e);
+		b.tipFor, b.tipIdx, b.tipBook = want, idx, book;
+	end
 	if ( idx and tt.SetSpell ) then
 		local ok = pcall(tt.SetSpell, tt, idx, book);
 		if ( ok and ( not tt.NumLines or tt:NumLines() > 0 ) ) then
@@ -568,6 +595,7 @@ function G.BuildSkills()
 	G.jewSlots = {};
 	for i = 1, 6 do
 		local j = CreateFrame("Frame", nil, UIParent);
+		j.tipTag = "jewelry";
 		j:SetWidth(22);
 		j:SetHeight(22);
 		j:SetFrameStrata("MEDIUM");
@@ -594,6 +622,25 @@ function G.BuildSkills()
 	end
 
 	-- buffs (lower row) and debuffs (upper row) above the right-hand side of the bar, as in GW2
+	-- what a buff says when the game has no tooltip text for it: its name (the loadout knows the name of an icon, a file
+	-- name such as Spell_Nature_RockBiter says it otherwise) and the time that is left
+	local function AuraFloor(tt, d)
+		local name = d.icon and G.iconNames[string.lower(tostring(d.icon))];
+		if ( not name and d.icon ) then
+			local base = string.gsub(tostring(d.icon), "^.*\\", "");
+			base = string.gsub(base, "^[Ss]pell_[%a]+_", "");
+			base = string.gsub(base, "([%l])(%u)", "%1 %2");
+			name = Pretty(base);
+		end
+		tt:AddLine(( name and name ~= "" ) and name or "Effect", G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+		if ( G.Num(d.left) > 0 ) then
+			tt:AddLine(G.Rem(d.left) .. " remaining", 0.8, 0.8, 0.8);
+		end
+		if ( G.Num(d.count) > 1 ) then
+			tt:AddLine("Stacks: " .. math.floor(d.count), 0.8, 0.8, 0.8);
+		end
+	end
+
 	local function BuildAuraRow(row, point, anchor, relPoint, x, y)
 		for i = 1, AURAS do
 			local a = CreateFrame("Frame", nil, UIParent);
@@ -623,9 +670,15 @@ function G.BuildSkills()
 				if ( d and d.index and tt.SetPlayerBuff ) then
 					tt:SetPlayerBuff(d.index);
 				elseif ( d ) then
-					tt:AddLine("Effect", G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+					AuraFloor(tt, d);
 				end
 			end, "ANCHOR_TOP");
+			a.tipTag = "aura";
+			a.tipFloor = function(tt)
+				if ( a.data ) then
+					AuraFloor(tt, a.data);
+				end
+			end;
 			a:Hide();
 			row[i] = a;
 			G.Register(a, true);
@@ -640,6 +693,7 @@ function G.BuildSkills()
 	G.status = {};
 	for i = 1, STATUS do
 		local s = CreateFrame("Frame", nil, UIParent);
+		s.tipTag = "status";
 		s:SetWidth(STATUSSIZE);
 		s:SetHeight(STATUSSIZE);
 		s:SetFrameStrata("MEDIUM");
@@ -691,10 +745,21 @@ function G.UpdateSkills(dt)
 		G.lastSpellStamp = stamp;
 		if ( stamp ) then
 			local t = G.RunTime();
+			local old = G.cdEnd;
 			G.cdEnd = {};
 			local sp = AZS_SPELLS or {};
 			for i = 1, table.getn(sp) do
-				G.cdEnd[sp[i].key] = t + G.Num(sp[i].cd);
+				local e = sp[i];
+				local cd = G.Num(e.cd);
+				local base = t + cd;
+				-- A skill that was ready and gets a very short cooldown (a fraction of its real one) did not really go
+				-- off: it tried to and could not (nothing in range), and the game puts a moment of cooldown on it every
+				-- try. Drawn as it is, that makes the icon flash for as long as nothing is in range; it stays "ready".
+				local was = old and old[e.key];
+				if ( was and was - t <= 0.1 and cd > 0 and cd < BLIP_MAX and cd < G.Num(e.cdmax) * BLIP_FRAC ) then
+					base = t;
+				end
+				G.cdEnd[e.key] = base;
 			end
 		end
 	end
@@ -742,7 +807,8 @@ end
 --     along with the looks) until you point at the skill again.
 -- The number on the chip is the most the skill can hit, whether or not that many enemies are near; a skill for one enemy
 -- shows nothing.
-local TGT_AGE = 2;              -- a skill is read again after this many seconds (an upgrade changes the text)
+local TGT_AGE = 10;             -- a skill is read again after this many seconds, whatever happened (a safety net: a change of
+                               -- the skills or of the stats makes the skills be read again at once, see ChangedUpgrades)
 local TGT_BUSY = 10;            -- seconds with a tooltip up before the spare tooltip is used instead
 local scanTip = nil;
 local tgtBusySince = nil;
@@ -1040,12 +1106,58 @@ local function HoverRead()
 end
 
 -- the game says when your spells or stats changed (a card was picked): every skill is read again soon
+-- What the numbers in a skill's tooltip depend on: which skills there are, their ranks and full cooldowns, and the stats
+-- (upgrades and cards end up in one of them). The game's table of spells changes every time a skill goes on cooldown, so
+-- its stamp alone says too much: the skills are read again only when this signature is another one.
+local function SpellSig()
+	local parts = {};
+	local sp = AZS_SPELLS or {};
+	for i = 1, table.getn(sp) do
+		parts[i] = tostring(sp[i].key) .. ":" .. tostring(sp[i].rank) .. ":" .. tostring(sp[i].cdmax);
+	end
+	return table.concat(parts, ",");
+end
+
+local function StatSig()
+	local names = {};
+	for k, v in pairs(AZS_STATS or {}) do
+		if ( type(v) == "number" ) then
+			table.insert(names, k);
+		end
+	end
+	table.sort(names);
+	local parts = {};
+	for i = 1, table.getn(names) do
+		parts[i] = names[i] .. "=" .. AZS_STATS[names[i]];
+	end
+	return table.concat(parts, ",");
+end
+
 local function ChangedUpgrades()
 	local a, b = AZS_SPELLS_UPDATED, AZS_STATS_UPDATED;
 	if ( G.tgtSeen.a == a and G.tgtSeen.b == b ) then
 		return;
 	end
+	local changed = false;
+	if ( G.tgtSeen.b ~= b ) then
+		local sig = StatSig();                          -- the stats are only added up when their stamp is another one
+		if ( sig ~= G.tgtSeen.statSig ) then
+			G.tgtSeen.statSig = sig;
+			changed = true;
+		end
+	end
+	if ( G.tgtSeen.a ~= a ) then
+		local sig = SpellSig();
+		if ( sig ~= G.tgtSeen.spellSig ) then
+			G.tgtSeen.spellSig = sig;
+			changed = true;
+		end
+	end
 	G.tgtSeen.a, G.tgtSeen.b = a, b;
+	if ( not changed ) then
+		return;
+	end
+	G.tgtCursor = 0;                                     -- read again from the first skill on
 	for i = 1, 7 do
 		local sl = SlotAt(i);
 		if ( sl ) then
@@ -1217,23 +1329,33 @@ function G.UpdateStatus(dt)
 		local e = list[i];
 		if ( e and G.shown ) then
 			s.data = e;
-			s.icon:SetTexture(e.icon or G.QUESTION);
-			s.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93);
-			s.icon:SetVertexColor(1, 1, 1, 1);
+			local icon = e.icon or G.QUESTION;
+			if ( s.cIcon ~= icon ) then
+				s.cIcon = icon;
+				s.icon:SetTexture(icon);
+				s.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93);
+				s.icon:SetVertexColor(1, 1, 1, 1);
+			end
+			local count = "";
 			if ( e.count and e.count > 1 ) then
-				s.count:SetText(tostring(e.count));
-			else
-				s.count:SetText("");
+				count = tostring(e.count);
 			end
+			if ( s.cCount ~= count ) then
+				s.cCount = count;
+				s.count:SetText(count);
+			end
+			local left = "";
 			if ( e.remaining ) then
-				s.time:SetText(G.Rem(e.remaining));
-			else
-				s.time:SetText("");
+				left = G.Rem(e.remaining);
 			end
-			s:Show();
+			if ( s.cLeft ~= left ) then
+				s.cLeft = left;
+				s.time:SetText(left);
+			end
+			G.Vis(s, true);
 		else
 			s.data = nil;
-			s:Hide();
+			G.Vis(s, false);
 		end
 	end
 end
@@ -1285,26 +1407,39 @@ local function ShowAuras(frames, list, harmful)
 		local d = list[i];
 		if ( d and G.shown ) then
 			a.data = d;
-			a.icon:SetTexture(d.icon);
-			a.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93);
+			if ( a.cIcon ~= d.icon ) then
+				a.cIcon = d.icon;
+				a.icon:SetTexture(d.icon);
+				a.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93);
+			end
 			if ( harmful ) then
-				local c = DISPEL[d.dispel or ""] or { 0.80, 0.10, 0.10 };
-				G.EdgeColor(a, c[1], c[2], c[3], 1);
+				local dispel = d.dispel or "";
+				if ( a.cDispel ~= dispel ) then
+					a.cDispel = dispel;
+					local c = DISPEL[dispel] or { 0.80, 0.10, 0.10 };
+					G.EdgeColor(a, c[1], c[2], c[3], 1);
+				end
 			end
+			local count = "";
 			if ( G.Num(d.count) > 1 ) then
-				a.count:SetText(tostring(math.floor(d.count)));
-			else
-				a.count:SetText("");
+				count = tostring(math.floor(d.count));
 			end
+			if ( a.cCount ~= count ) then
+				a.cCount = count;
+				a.count:SetText(count);
+			end
+			local left = "";
 			if ( G.Num(d.left) > 0 ) then
-				a.time:SetText(G.Rem(d.left));
-			else
-				a.time:SetText("");
+				left = G.Rem(d.left);
 			end
-			a:Show();
+			if ( a.cLeft ~= left ) then
+				a.cLeft = left;
+				a.time:SetText(left);
+			end
+			G.Vis(a, true);
 		else
 			a.data = nil;
-			a:Hide();
+			G.Vis(a, false);
 		end
 	end
 end

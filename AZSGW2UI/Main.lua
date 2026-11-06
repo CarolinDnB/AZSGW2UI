@@ -128,6 +128,7 @@ function G.SetShown(show)
 		end
 	else
 		for i = 1, table.getn(G.all) do
+			G.all[i].vis = nil;
 			G.all[i]:Hide();
 		end
 		if ( G.charPanel ) then
@@ -333,6 +334,7 @@ local function Help()
 	G.Print("/gw2 stats : every value of AZS_STATS (to check what the attributes show)");
 	G.Print("/gw2 hunt on|off : look for the game's own popup text on screen (stops itself when it finds none)");
 	G.Print("/gw2 debug : what is hidden, which bindings the buttons use");
+	G.Print("/gw2 focus : what is under the mouse (point at something that has no tooltip first); /gw2 rows : where the game draws its own skill icons");
 end
 
 local function FindFrames(text)
@@ -390,6 +392,106 @@ local function FindFrames(text)
 	end
 end
 
+-- the chain of names above a frame: "AZSSpell3 < AZSHud < UIParent"
+local function Chain(f)
+	local out, depth = {}, 0;
+	while ( f and depth < 6 ) do
+		local n = f.GetName and f:GetName();
+		table.insert(out, n or "(unnamed)");
+		f = f.GetParent and f:GetParent();
+		depth = depth + 1;
+	end
+	return table.concat(out, " < ");
+end
+
+-- /gw2 focus: what is under the mouse right now (point at a thing that has no tooltip and type this)
+local function FocusReport()
+	local f = GetMouseFocus and GetMouseFocus();
+	if ( not f ) then
+		G.Print("nothing is under the mouse (point at the thing, then type /gw2 focus).");
+		return;
+	end
+	local kind = f.GetObjectType and f:GetObjectType() or "?";
+	G.Print("under the mouse: " .. Chain(f) .. " [" .. kind .. "]"
+		.. ( f.IsVisible and f:IsVisible() and ", visible" or ", hidden" ));
+	if ( f.GetWidth and f.GetHeight ) then
+		G.Print("size " .. string.format("%.0f x %.0f", f:GetWidth() or 0, f:GetHeight() or 0)
+			.. ", mouse " .. tostring(f.IsMouseEnabled and f:IsMouseEnabled())
+			.. ", OnEnter " .. tostring(f.GetScript and f:GetScript("OnEnter") ~= nil));
+	end
+	if ( f.tipTag ) then
+		G.Print("one of ours (" .. f.tipTag .. ")" .. ( f.entry and ( ", skill " .. tostring(f.entry.key) ) or "" )
+			.. ( f.data and f.data.name and ( ", " .. G.Plain(f.data.name) ) or "" ));
+	else
+		G.Print("not one of ours: the game's own frame, or another addon's");
+	end
+	local t = G.tipLast;
+	if ( t ) then
+		G.Print("last tooltip of ours: " .. t.tag .. ", " .. t.lines .. " lines" .. ( t.floor and ", filled by the fallback" or "" ));
+	end
+	if ( f.GetRegions ) then
+		local regs = { f:GetRegions() };
+		local shown = 0;
+		for i = 1, table.getn(regs) do
+			local r = regs[i];
+			if ( shown < 4 and r.GetTexture and r:GetObjectType() == "Texture" ) then
+				local tex = r:GetTexture();
+				if ( tex ) then
+					G.Print("texture: " .. G.Plain(tostring(tex)));
+					shown = shown + 1;
+				end
+			end
+		end
+	end
+end
+
+-- /gw2 rows: where the game draws its own skill icons (frames showing the icon of one of your skills; ours left out)
+local function RowsReport()
+	if ( not EnumerateFrames ) then
+		G.Print("this client has no EnumerateFrames.");
+		return;
+	end
+	local want = {};
+	local n = 0;
+	for key, info in pairs(G.abilityInfo or {}) do
+		if ( info.icon ) then
+			want[string.lower(tostring(info.icon))] = info.name or key;
+			n = n + 1;
+		end
+	end
+	if ( n == 0 ) then
+		G.Print("no skill icons known yet: start a run first.");
+		return;
+	end
+	local found, ours = 0, 0;
+	local f = EnumerateFrames();
+	while ( f ) do
+		if ( f.GetRegions ) then
+			local regs = { f:GetRegions() };
+			for i = 1, table.getn(regs) do
+				local r = regs[i];
+				if ( r.GetObjectType and r:GetObjectType() == "Texture" ) then
+					local tex = r:GetTexture();
+					local what = type(tex) == "string" and want[string.lower(tex)];
+					if ( what ) then
+						if ( f.tipTag or f.entry or f.data ) then
+							ours = ours + 1;
+						elseif ( found < 16 ) then
+							found = found + 1;
+							G.Print(G.Plain(what) .. ": " .. Chain(f) .. ( f:IsVisible() and ", visible" or ", hidden" )
+								.. ( r.IsShown and r:IsShown() and "" or ", icon hidden" ));
+						end
+						break;
+					end
+				end
+			end
+		end
+		f = EnumerateFrames(f);
+	end
+	G.Print("frames with a skill icon that are not ours: " .. found .. " (ours: " .. ours .. ")."
+		.. ( found == 0 and " The game's own skill row is not drawn right now." or "" ));
+end
+
 local function ListBindings(text)
 	if ( not GetNumBindings ) then
 		return;
@@ -427,6 +529,10 @@ function G.Slash(msg)
 			G.settings:Hide();
 		end
 		G.Print("off. The game's own HUD is back. /gw2 on to use this UI again.");
+		local phase = AZS_GetPhase and AZS_GetPhase() or nil;
+		if ( phase == "playing" or phase == "choosing" or phase == "paused" ) then
+			G.Print("A run is on: if the game's own skill bars look empty, /reload makes the game draw them again. /gw2 rows shows what the game has drawn.");
+		end
 	elseif ( cmd == "on" ) then
 		AZSGW2DB.enabled = true;
 		G.HideGameHud(true);
@@ -512,6 +618,10 @@ function G.Slash(msg)
 		G.Print(rest .. " is no longer kept hidden.");
 	elseif ( cmd == "find" and rest ~= "" ) then
 		FindFrames(rest);
+	elseif ( cmd == "focus" ) then
+		FocusReport();
+	elseif ( cmd == "rows" ) then
+		RowsReport();
 	elseif ( cmd == "dmg" or cmd == "damage" ) then
 		if ( rest == "all" ) then
 			G.SetOpt("dmg", true);
@@ -629,6 +739,9 @@ function G.Slash(msg)
 			n = n + 1;
 		end
 		G.Print("stock frames kept hidden: " .. n);
+		if ( G.tipLast ) then
+			G.Print("last tooltip of ours: " .. G.tipLast.tag .. ", " .. G.tipLast.lines .. " lines" .. ( G.tipLast.floor and ", filled by the fallback" or "" ));
+		end
 		G.Print("talents button: " .. G.BindingText("talents"));
 		G.Print("character button: " .. G.BindingText("character"));
 		G.Print("party members: " .. tostring(GetNumPartyMembers and GetNumPartyMembers()));

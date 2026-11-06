@@ -91,6 +91,8 @@ Unlocked, every frame gets a gold box with its name and size: drag it to move it
     /gw2 unhide <FrameName>
     /gw2 find <text>                  list frames showing that text, to find a name for /gw2 hide
     /gw2 hunt on | off                the search for the game's own popups (stops by itself when it finds none)
+    /gw2 focus                        what is under the mouse: point at a thing with no tooltip, then type this
+    /gw2 rows                         where the game draws its own skill icons (after /gw2 off in a run)
     /gw2 dmg all | crits | off        damage numbers: everything / critical hits only / none
     /gw2 dmg ticks on | ticks off     damage over time ticks in the numbers
     /gw2 char [on | off]              open the hero panel / use it instead of the game's character window
@@ -177,6 +179,8 @@ code here are original.
 - Friendly nameplates: "hide totems" instead of "show totems", totems are recognised more reliably; `/gw2 plates debug` shows what each plate is taken for.
 - `/gw2 off` gives the game's whole HUD back, the spells row included.
 - The health bars of guardians and bosses no longer stay up in a new run when the run before ended while they were alive.
+- Skills that are ready but cannot be used (nothing in range) no longer flash. A buff the game has no text for (Rockbiter Weapon) has a tooltip. `/gw2 off` in a run switches the game's skill bars off and on again so they redraw (`/reload` if they are still empty). Less work per frame: the skills' tooltips are read when something changed, not all the time.
+- `/gw2 focus` (what is under the mouse) and `/gw2 rows` (where the game draws its own skill icons) help to report a missing tooltip or an empty bar.
 
 ## Changes in 1.9.0
 

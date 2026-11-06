@@ -307,6 +307,20 @@ function G.Text(parent, size, justify, layer)
 	return fs;
 end
 
+-- Show / Hide that skip the call when the frame is already in that state (the state this function set last). Only for
+-- frames that nothing else shows or hides, except G.SetShown, which forgets the state (frame.vis) of every frame it hides.
+function G.Vis(f, on)
+	if ( on ) then
+		if ( f.vis ~= true ) then
+			f.vis = true;
+			f:Show();
+		end
+	elseif ( f.vis ~= false ) then
+		f.vis = false;
+		f:Hide();
+	end
+end
+
 -- SetText that skips the call when the string is the one already shown. Only for text that nothing else
 -- writes to (a fixed set of font strings, so the table stays small).
 local textShown = {};
@@ -570,6 +584,15 @@ function G.Tooltip(frame, func, anchor, live)
 			G.tipFailed = true;                       -- say it once; the tooltip still shows what it got so far
 			G.Print("tooltip error: " .. tostring(err));
 		end
+		-- A tooltip with no line is not shown at all (the game gave nothing for the thing: a buff it has no text for, say).
+		-- A frame that can say what it is (frame.tipFloor) gets its own lines then, so hovering always shows something.
+		local lines = GameTooltip.NumLines and GameTooltip:NumLines() or 1;
+		local floor = false;
+		if ( lines == 0 and frame.tipFloor ) then
+			floor = true;
+			pcall(frame.tipFloor, GameTooltip);
+		end
+		G.tipLast = { tag = frame.tipTag or "?", floor = floor, lines = GameTooltip.NumLines and GameTooltip:NumLines() or -1 };
 		GameTooltip:Show();
 	end
 	frame:SetScript("OnEnter", function()
@@ -600,7 +623,9 @@ function G.UpdateLiveTip(dt)
 	end
 	local ok, need = pcall(t.need);
 	if ( ok and need ) then
+		G.tipRefill = true;                             -- drawn again, not opened: what was looked up for it is still good
 		pcall(t.fill);
+		G.tipRefill = false;
 	end
 end
 
@@ -915,8 +940,28 @@ function G.HideGameHud(hide)
 	end
 	if ( hide ) then
 		G.hudRestoreUntil = nil;
+		G.hudRetoggle = nil;
 	else
 		G.hudRestoreUntil = GetTime() + 6;       -- watched for a few seconds: the game may put a part back to hidden
+		-- The game's skill rows did not draw while they were hidden. Switched off and on again a moment later, as the
+		-- checkbox in the game's options does, they get the chance to draw what the game knows now.
+		G.hudRetoggle = { GetTime() + 0.5, GetTime() + 2.5 };
+	end
+end
+
+-- the game's skill rows switched off and on again (the options checkbox, done by hand)
+local function RetoggleBuild()
+	if ( not AZS_SetHudShown ) then
+		return;
+	end
+	local cvar = G.HUD_CVAR.build;
+	AZS_SetHudShown("build", false);
+	if ( SetCVar and cvar ) then
+		SetCVar(cvar, "0");
+	end
+	AZS_SetHudShown("build", true);
+	if ( SetCVar and cvar ) then
+		SetCVar(cvar, "1");
 	end
 end
 
@@ -926,8 +971,15 @@ function G.CheckHudRestore()
 	if ( not untilT or not AZS_SetHudShown ) then
 		return;
 	end
-	if ( GetTime() > untilT ) then
+	local now = GetTime();
+	local rt = G.hudRetoggle;
+	if ( rt and rt[1] and now >= rt[1] ) then
+		table.remove(rt, 1);
+		RetoggleBuild();
+	end
+	if ( now > untilT ) then
 		G.hudRestoreUntil = nil;
+		G.hudRetoggle = nil;
 		return;
 	end
 	local list = G.HudList(true);

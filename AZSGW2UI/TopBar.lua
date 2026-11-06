@@ -162,10 +162,15 @@ function G.UpdateTop(dt)
 	end
 	local endless = ( G.Num(run.endl) == 1 );
 
+	local title;
 	if ( endless ) then
-		f.title:SetText("ENDLESS  " .. G.Clock(t));
+		title = "ENDLESS  " .. G.Clock(t);
 	else
-		f.title:SetText("RUN " .. G.Clock(t) .. " / " .. G.Clock(len));
+		title = "RUN " .. G.Clock(t) .. " / " .. G.Clock(len);
+	end
+	if ( f.cTitle ~= title ) then
+		f.cTitle = title;
+		f.title:SetText(title);
 	end
 
 	local frac = 0;
@@ -188,26 +193,40 @@ function G.UpdateTop(dt)
 		if ( e and not endless and len > 0 ) then
 			s.data = e;
 			local x = G.Clamp(G.Num(e.at) / len, 0, 1) * BARW;
-			s:ClearAllPoints();
-			s:SetPoint("CENTER", f.bar, "LEFT", x, 0);
-			if ( e.state == "dead" ) then
-				s.tex:SetVertexColor(0.35, 0.35, 0.38, 0.8);
-			elseif ( e.state == "up" ) then
-				s.tex:SetVertexColor(1, 0.25, 0.2, pulse);
-			elseif ( e.final == 1 ) then
-				s.tex:SetVertexColor(1, 0.85, 0.4, 1);
-			else
-				s.tex:SetVertexColor(1, 1, 1, 1);
+			if ( s.cX ~= x ) then
+				s.cX = x;
+				s:ClearAllPoints();
+				s:SetPoint("CENTER", f.bar, "LEFT", x, 0);
 			end
-			s:Show();
+			-- the colour is only sent when it changes; a boss that is up pulses, so its colour is sent every time
+			local state = e.state == "up" and "up" or ( e.state == "dead" and "dead" or ( e.final == 1 and "final" or "norm" ) );
+			if ( state == "up" ) then
+				s.tex:SetVertexColor(1, 0.25, 0.2, pulse);
+				s.cState = nil;
+			elseif ( s.cState ~= state ) then
+				s.cState = state;
+				if ( state == "dead" ) then
+					s.tex:SetVertexColor(0.35, 0.35, 0.38, 0.8);
+				elseif ( state == "final" ) then
+					s.tex:SetVertexColor(1, 0.85, 0.4, 1);
+				else
+					s.tex:SetVertexColor(1, 1, 1, 1);
+				end
+			end
+			G.Vis(s, true);
 		else
 			s.data = nil;
-			s:Hide();
+			G.Vis(s, false);
 		end
 	end
 
-	-- difficulty tag and affixes
-	local d = G.Difficulty();
+	-- difficulty tag and affixes (worked out again only when the two values it comes from are other ones)
+	local zone = AZS_ZONE or {};
+	local d = f.cDiff;
+	if ( not d or f.cHeroic ~= zone.heroic or f.cAffixes ~= zone.affixes ) then
+		d = G.Difficulty();
+		f.cDiff, f.cHeroic, f.cAffixes = d, zone.heroic, zone.affixes;
+	end
 	local key = d.short .. "|" .. table.concat(d.affixes, ",");
 	if ( f.diffKey ~= key ) then
 		f.diffKey = key;
@@ -247,15 +266,26 @@ function G.UpdateTop(dt)
 			end
 		end
 	end
-	f.next:SetText(line);
-	f.next:SetTextColor(r, g, b);
+	if ( f.cLine ~= line ) then
+		f.cLine = line;
+		f.next:SetText(line);
+		f.cFit = nil;
+	end
+	if ( f.cR ~= r or f.cG ~= g or f.cB ~= b ) then
+		f.cR, f.cG, f.cB = r, g, b;
+		f.next:SetTextColor(r, g, b);
+	end
 	-- the affixes only show when both texts fit on the line (the difficulty tooltip lists them anyway)
 	if ( ( f.affixLen or 0 ) > 0 ) then
-		local room = f:GetWidth() - 20 - 8;
-		if ( f.next:GetStringWidth() + f.affix:GetStringWidth() <= room ) then
-			f.affix:Show();
-		else
-			f.affix:Hide();
+		if ( f.cFit == nil or f.cFitKey ~= key ) then
+			f.cFitKey = key;
+			local room = f:GetWidth() - 20 - 8;
+			f.cFit = ( f.next:GetStringWidth() + f.affix:GetStringWidth() <= room );
+			if ( f.cFit ) then
+				f.affix:Show();
+			else
+				f.affix:Hide();
+			end
 		end
 	end
 end
@@ -577,33 +607,45 @@ local DISPELCOL = {
 };
 
 -- fills one row; returns how tall it is
+-- Called a few times a second for every row, so every widget is only touched when what it shows has changed.
 local function FillRow(row, e)
-	row:Show();
+	if ( row.on ~= true ) then
+		row.on = true;
+		row:Show();
+	end
 	row.entry = e;
-	local nameText = tostring(e.name or "?");
-	local r, g, b = 0.78, 0.11, 0.08;
-	local nr, ng, nb = 1, 1, 1;
-	row.crown:SetVertexColor(1, 1, 1, 1);
-	if ( e.kind == "final" ) then
-		r, g, b = 0.90, 0.07, 0.05;
-		nr, ng, nb = G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3];
-		row.crown:SetVertexColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 1);
+	local kind, enraged, name = e.kind, e.enraged and true or false, e.name;
+	if ( row.cKind ~= kind or row.cEnr ~= enraged or row.cName ~= name ) then
+		row.cKind, row.cEnr, row.cName = kind, enraged, name;
+		local nameText = tostring(name or "?");
+		local r, g, b = 0.78, 0.11, 0.08;
+		local nr, ng, nb = 1, 1, 1;
+		row.crown:SetVertexColor(1, 1, 1, 1);
+		if ( kind == "final" ) then
+			r, g, b = 0.90, 0.07, 0.05;
+			nr, ng, nb = G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3];
+			row.crown:SetVertexColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 1);
+		end
+		if ( enraged ) then
+			r, g, b = 0.95, 0.42, 0.05;
+			nameText = nameText .. "  (Enraged)";
+			nr, ng, nb = 1, 0.62, 0.30;
+		end
+		row.name:SetText(nameText);
+		row.name:SetTextColor(nr, ng, nb);
+		row.bar:SetColor(r, g, b);
 	end
-	if ( e.enraged ) then
-		r, g, b = 0.95, 0.42, 0.05;
-		nameText = nameText .. "  (Enraged)";
-		nr, ng, nb = 1, 0.62, 0.30;
-	end
-	row.name:SetText(nameText);
-	row.name:SetTextColor(nr, ng, nb);
-	row.bar:SetColor(r, g, b);
 	local hpm = G.Num(e.hpm);
 	local frac = 0;
 	if ( hpm > 0 ) then
 		frac = G.Clamp(G.Num(e.hp) / hpm, 0, 1);
 	end
 	row.bar:SetFrac(frac);
-	row.pct:SetText(string.format("%d%%", math.floor(frac * 100 + 0.5)));
+	local pct = math.floor(frac * 100 + 0.5);
+	if ( row.cPct ~= pct ) then
+		row.cPct = pct;
+		row.pct:SetText(pct .. "%");
+	end
 
 	local deb = e.debuffs or {};
 	local shownDeb = 0;
@@ -612,23 +654,40 @@ local function FillRow(row, e)
 		local x = deb[j];
 		if ( x ) then
 			d.data = x;
-			d.icon:SetTexture(x.icon or G.QUESTION);
-			d.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93);
-			local c = DISPELCOL[x.dispelType or ""] or { 0.28, 0.38, 0.78 };
-			d.edges.top:SetVertexColor(c[1], c[2], c[3], 1);
-			d.edges.bottom:SetVertexColor(c[1], c[2], c[3], 1);
-			d.edges.left:SetVertexColor(c[1], c[2], c[3], 1);
-			d.edges.right:SetVertexColor(c[1], c[2], c[3], 1);
-			if ( G.Num(x.stacks) > 1 ) then
-				d.stack:SetText(tostring(math.floor(x.stacks)));
-			else
-				d.stack:SetText("");
+			local icon, dispel, stacks = x.icon or G.QUESTION, x.dispelType or "", G.Num(x.stacks);
+			if ( d.cIcon ~= icon ) then
+				d.cIcon = icon;
+				d.icon:SetTexture(icon);
+				d.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93);
 			end
-			d:Show();
+			if ( d.cDispel ~= dispel ) then
+				d.cDispel = dispel;
+				local c = DISPELCOL[dispel] or { 0.28, 0.38, 0.78 };
+				d.edges.top:SetVertexColor(c[1], c[2], c[3], 1);
+				d.edges.bottom:SetVertexColor(c[1], c[2], c[3], 1);
+				d.edges.left:SetVertexColor(c[1], c[2], c[3], 1);
+				d.edges.right:SetVertexColor(c[1], c[2], c[3], 1);
+			end
+			if ( stacks > 1 ) then
+				stacks = math.floor(stacks);
+			else
+				stacks = 0;
+			end
+			if ( d.cStacks ~= stacks ) then
+				d.cStacks = stacks;
+				d.stack:SetText(stacks > 0 and tostring(stacks) or "");
+			end
+			if ( d.on ~= true ) then
+				d.on = true;
+				d:Show();
+			end
 			shownDeb = shownDeb + 1;
 		else
 			d.data = nil;
-			d:Hide();
+			if ( d.on ~= false ) then
+				d.on = false;
+				d:Hide();
+			end
 		end
 	end
 
@@ -695,7 +754,10 @@ function G.UpdateBosses(dt)
 			y = y + h;
 			shown = shown + 1;
 		else
-			row:Hide();
+			if ( row.on ~= false ) then
+				row.on = false;
+				row:Hide();
+			end
 			row.entry = nil;
 		end
 	end
