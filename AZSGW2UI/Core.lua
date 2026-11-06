@@ -577,9 +577,13 @@ G.liveTip = nil;
 
 function G.Tooltip(frame, func, anchor, live)
 	frame:EnableMouse(true);
+	frame.azsTip = true;                              -- one of ours: a search for the game's own frames leaves it out
 	local function Fill()
 		GameTooltip:SetOwner(frame, anchor or "ANCHOR_TOP");
+		G.tipOwner, G.tipAnchor = frame, anchor or "ANCHOR_TOP";
+		G.tipFilling = true;                          -- a tooltip that is really being shown (see the skills' tooltips)
 		local ok, err = pcall(func, GameTooltip);
+		G.tipFilling = false;
 		if ( not ok and not G.tipFailed ) then
 			G.tipFailed = true;                       -- say it once; the tooltip still shows what it got so far
 			G.Print("tooltip error: " .. tostring(err));

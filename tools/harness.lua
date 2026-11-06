@@ -212,6 +212,11 @@ impl.AddLine = function(self, t, r, g, b)
 	if r ~= nil then needNum("AddLine color", r, g, b) end
 	table.insert(tipLines, t)
 end
+impl.AddDoubleLine = function(self, l, r, lr, lg, lb, rr, rg, rb)
+	assert(type(l) == "string" and type(r) == "string", "AddDoubleLine text")
+	if lr ~= nil then needNum("AddDoubleLine color", lr, lg, lb, rr, rg, rb) end
+	table.insert(tipLines, l .. " | " .. r)
+end
 local tipStore = {}
 -- book index -> the lines of the game's spell tooltip (for the scan tooltip). The text of a tooltip only changes when the
 -- hero's upgrades do, and the game says so with a new stats stamp: a change here is made like that.
@@ -2188,6 +2193,91 @@ scenario("skills: a skill that is in no spellbook gets the game's tooltip by its
 	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
 	runTicks(20, 0.1)
 	print("tooltips by spell id ok")
+end)
+
+scenario("skills: the game's own icon of a skill gives its text when no spellbook and no link has it", function()
+	local keep = AZS_SPELLS[5]
+	local b = G.slots[5]
+	AZS_SPELLS[5] = { key = "rockbiter", spell = 8017, rank = 1, cd = 0, cdmax = 1.6 }
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(10, 0.05)
+	local icon = "Interface\\Icons\\Spell_Nature_RockBiter"
+	G.abilityInfo.rockbiter = { name = "Rockbiter Weapon", icon = icon }
+	G.linkKind, G.linkMiss = {}, {}
+	-- no frame of the game draws the icon: our own lines
+	b.scripts.OnEnter()
+	assert(tipLines[1] == "Rockbiter Weapon" and #tipLines >= 3, "own lines: " .. table.concat(tipLines, " | "))
+	b.scripts.OnLeave()
+	SlashCmdList["AZSGW2"]("focus")
+	-- a frame of ours that has the icon and calls our own tooltip must not send the tooltip round in circles
+	local oursLike = CreateFrame("Button", "FakeOursLike", UIParent)
+	local ot = oursLike:CreateTexture(nil, "ARTWORK"); ot:SetTexture(icon)
+	oursLike:SetScript("OnEnter", function() b.scripts.OnEnter() end)
+	-- another skill's icon of the game: not taken for this one
+	local other = CreateFrame("Button", "FakeOtherIcon", UIParent)
+	local ox = other:CreateTexture(nil, "ARTWORK"); ox:SetTexture(icon)
+	other:SetScript("OnEnter", function()
+		GameTooltip:SetOwner(this, "ANCHOR_RIGHT"); GameTooltip.tipText = { "Something Else", "Does things." }
+		for i, t in ipairs(GameTooltip.tipText) do local fs = _G["GameTooltipTextLeft" .. i] or new("FontString", GameTooltip, "GameTooltipTextLeft" .. i); fs.fontSet = true; fs.text = t end
+	end)
+	-- a script that fails
+	local broken = CreateFrame("Button", "FakeBrokenIcon", UIParent)
+	local bx = broken:CreateTexture(nil, "ARTWORK"); bx:SetTexture(icon)
+	broken:SetScript("OnEnter", function() error("boom") end)
+	-- the game's own icon, with its text
+	local gameIcon = CreateFrame("Button", "FakeGameRockbiter", UIParent)
+	local gx = gameIcon:CreateTexture(nil, "ARTWORK"); gx:SetTexture(string.lower(icon))
+	local seenThis, left
+	gameIcon:SetScript("OnEnter", function()
+		seenThis = this
+		GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+		local lines = { "Rockbiter Weapon", "Imbue your weapon with the power of earth.", "Ready in 1.0 sec", "Rank 1" }
+		GameTooltip.tipText = lines
+		for i, t in ipairs(lines) do
+			local fs = _G["GameTooltipTextLeft" .. i] or new("FontString", GameTooltip, "GameTooltipTextLeft" .. i)
+			fs.fontSet = true; fs.text = t; fs.tcol = i == 1 and { 1, 0.82, 0 } or { 1, 1, 1 }
+		end
+		local rf = _G["GameTooltipTextRight4"] or new("FontString", GameTooltip, "GameTooltipTextRight4")
+		rf.fontSet = true; rf.text = "Nature"; rf.tcol = { 0.5, 0.5, 0.5 }
+		GameTooltip.shown = true
+	end)
+	gameIcon:SetScript("OnLeave", function() left = true; GameTooltip:Hide() end)
+	G.borrowNote = {}; now = now + 40                         -- "no frame" was remembered for a while
+	b.scripts.OnEnter()
+	assert(seenThis == gameIcon, "the game's tooltip script was not run with its own frame as this")
+	assert(left, "its OnLeave was not run")
+	assert(tipLines[1] == "Rockbiter Weapon" and tipLines[2] == "Imbue your weapon with the power of earth.", "text: " .. table.concat(tipLines, " | "))
+	assert(tipLines[3] == "Rank 1 | Nature", "the right side of a line: " .. table.concat(tipLines, " | "))
+	assert(tipLines[#tipLines] == "Casts automatically", "no own last line: " .. table.concat(tipLines, " | "))
+	for _, t in ipairs(tipLines) do assert(not string.find(t, "Ready in 1.0"), "the game's own timer line was copied") end
+	assert(GameTooltip.shown and GameTooltip.owner == b, "the tooltip is not ours again")
+	assert(string.find(G.borrowNote[string.lower(icon)] or "", "works"), "no note: " .. tostring(G.borrowNote[string.lower(icon)]))
+	SlashCmdList["AZSGW2"]("focus")
+	local mf = GetMouseFocus
+	GetMouseFocus = function() return b end
+	SlashCmdList["AZSGW2"]("focus")
+	GetMouseFocus = mf
+	b.scripts.OnLeave()
+	-- hovering again: still there (the frame that worked is asked first, the others are not)
+	seenThis = nil
+	b.scripts.OnEnter()
+	assert(seenThis == gameIcon and tipLines[2] == "Imbue your weapon with the power of earth.")
+	b.scripts.OnLeave()
+	-- the game's icon is gone: our own lines, remembered for a while and tried again later
+	gameIcon:Hide(); gameIcon:SetScript("OnEnter", nil)
+	G.borrowNote = {}; now = now + 40
+	b.scripts.OnEnter()
+	assert(tipLines[1] == "Rockbiter Weapon" and tipLines[2] == "Rank 1", "back to own lines: " .. table.concat(tipLines, " | "))
+	assert(GameTooltip.owner == b and GameTooltip.shown, "tooltip lost")
+	assert(string.find(G.borrowNote[string.lower(icon)] or "", "none gave"), "no note: " .. tostring(G.borrowNote[string.lower(icon)]))
+	b.scripts.OnLeave()
+	runTicks(40, 0.1)
+	for _, w in ipairs({ oursLike, other, broken, gameIcon }) do w:Hide(); w:SetScript("OnEnter", nil) end
+	G.abilityInfo.rockbiter = nil
+	AZS_SPELLS[5] = keep
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(20, 0.1)
+	print("the game's own icon text ok")
 end)
 
 scenario("/gw2 rows tip: the tooltips of the game's own skill icons", function()

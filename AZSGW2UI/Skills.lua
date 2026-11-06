@@ -467,6 +467,149 @@ local function SetByLink(tt, e, name)
 	return false;
 end
 
+------------------------------------------------------------------------ the text the game's own skill icon shows
+
+-- The game's own UI shows a text for each of your skills when the mouse is on its icon, also for one that is in no spellbook
+-- (Rockbiter Weapon). Where the spellbook and the spell's id have nothing, a frame of the game (not ours) that draws the
+-- skill's icon and has an OnEnter script is pointed at the way the mouse does it, and the lines it makes are copied onto our
+-- tooltip. Only for a tooltip that is really shown, and never from inside itself.
+local BORROW_AGE, BORROW_REPEAT = 30, 1;
+local borrowFrames = {};                         -- icon path (lower case) -> { at, frames }
+local borrowMiss = {};                           -- icon path -> when no frame gave the text
+local borrowing = false;
+G.borrowNote = {};                               -- icon path -> what came of it (for /gw2 focus)
+
+-- the frames of the game that draw this icon and have a tooltip script (found once in a while, not at every hover)
+local function GameIconFrames(key)
+	local c = borrowFrames[key];
+	local now = GetTime();
+	if ( c and now - c.at < BORROW_AGE ) then
+		return c.list;
+	end
+	local list = {};
+	local f = EnumerateFrames();
+	while ( f and table.getn(list) < 6 ) do
+		if ( not f.azsTip and f.GetRegions and f.GetScript and f:GetScript("OnEnter") ) then
+			local regs = { f:GetRegions() };
+			for i = 1, table.getn(regs) do
+				local r = regs[i];
+				if ( r.GetObjectType and r:GetObjectType() == "Texture" ) then
+					local tex = r:GetTexture();
+					if ( type(tex) == "string" and string.lower(tex) == key ) then
+						table.insert(list, f);
+						break;
+					end
+				end
+			end
+		end
+		f = EnumerateFrames(f);
+	end
+	borrowFrames[key] = { at = now, list = list };
+	return list;
+end
+
+-- the lines of the tooltip as they are now: { left, r, g, b, right, r, g, b } each
+local function ReadLines(tt)
+	local tn = ( tt.GetName and tt:GetName() ) or "GameTooltip";
+	local lines = {};
+	local n = tt:NumLines() or 0;
+	for i = 1, n do
+		local l = getglobal(tn .. "TextLeft" .. i);
+		local r = getglobal(tn .. "TextRight" .. i);
+		local lt = l and l.GetText and l:GetText();
+		local rt = r and r.GetText and r:GetText();
+		local lr, lg, lb, rr, rg, rb = 1, 1, 1, 1, 1, 1;
+		if ( l and l.GetTextColor ) then
+			lr, lg, lb = l:GetTextColor();
+		end
+		if ( r and r.GetTextColor ) then
+			rr, rg, rb = r:GetTextColor();
+		end
+		table.insert(lines, { lt or "", lr or 1, lg or 1, lb or 1, rt, rr or 1, rg or 1, rb or 1 });
+	end
+	return lines;
+end
+
+-- the time left and "casts automatically" are said by our own lines
+local function OwnLine(text)
+	local t = string.lower(text or "");
+	return string.find(t, "^ready in") ~= nil or string.find(t, "^casts automatically") ~= nil;
+end
+
+local function BorrowTip(tt, b, icon, name)
+	if ( borrowing or not G.tipFilling or type(icon) ~= "string" or icon == "" or not G.tipOwner
+		or not ( EnumerateFrames and tt.SetOwner and tt.NumLines ) ) then
+		return false;
+	end
+	local now = GetTime();
+	local key = string.lower(icon);
+	local lines = nil;
+	if ( G.tipRefill and b.borrowLines and b.borrowFor == key and now - b.borrowAt < BORROW_REPEAT ) then
+		lines = b.borrowLines;                         -- only drawn again for its timer
+	else
+		local miss = borrowMiss[key];
+		if ( miss and now - miss < BORROW_AGE ) then
+			return false;
+		end
+		local list = GameIconFrames(key);
+		if ( table.getn(list) == 0 ) then
+			G.borrowNote[key] = "no frame of the game draws this icon and has a tooltip script (its own skill icons may not be drawn)";
+			borrowMiss[key] = now;
+			return false;
+		end
+		local owner, anchor = G.tipOwner, G.tipAnchor;
+		local keepThis = this;
+		local tried = 0;
+		borrowing = true;
+		for i = 1, table.getn(list) do
+			local fr = list[i];
+			local enter = fr.GetScript and fr:GetScript("OnEnter");
+			if ( enter ) then
+				tried = tried + 1;
+				this = fr;
+				local ok = pcall(enter);
+				local got = nil;
+				if ( ok ) then
+					got = ReadLines(tt);
+				end
+				local leave = fr.GetScript and fr:GetScript("OnLeave");
+				if ( leave ) then
+					this = fr;
+					pcall(leave);
+				end
+				this = keepThis;
+				if ( got and table.getn(got) >= 2 and got[1][1] ~= "" and LinkFits(got[1][1], name) ) then
+					lines = got;
+					table.remove(list, i);
+					table.insert(list, 1, fr);               -- the one that worked is the first to ask next time
+					break;
+				end
+			end
+		end
+		this = keepThis;
+		borrowing = false;
+		pcall(tt.SetOwner, tt, owner, anchor);            -- the game's script made the tooltip its own: ours again, empty
+		if ( not lines ) then
+			G.borrowNote[key] = tried .. " frame(s) of the game draw this icon, none gave a tooltip that starts with the skill's name";
+			borrowMiss[key] = now;
+			return false;
+		end
+		G.borrowNote[key] = "works: the game's own text, " .. table.getn(lines) .. " lines";
+		b.borrowLines, b.borrowFor, b.borrowAt = lines, key, now;
+	end
+	for i = 1, table.getn(lines) do
+		local L = lines[i];
+		if ( not OwnLine(L[1]) ) then
+			if ( L[5] and L[5] ~= "" and tt.AddDoubleLine ) then
+				tt:AddDoubleLine(L[1], L[5], L[2], L[3], L[4], L[6], L[7], L[8]);
+			else
+				tt:AddLine(L[1], L[2], L[3], L[4], 1);
+			end
+		end
+	end
+	return true;
+end
+
 -- /gw2 focus on a skill: where its spell was found, or which spells of the books have a similar name
 function G.SkillBookReport(b)
 	local e = b and b.entry;
@@ -480,6 +623,9 @@ function G.SkillBookReport(b)
 	local sid = math.floor(G.Num(e.spell));
 	G.Print("  spell id " .. sid .. ", tooltip by id: " .. ( G.linkKind[sid] and ( "works (" .. G.linkKind[sid] .. " link)" )
 		or ( G.linkMiss[sid] and "no kind of link gave one" or "not tried yet" )));
+	if ( not idx and info and info.icon ) then
+		G.Print("  text from the game's own icon of the skill: " .. G.Plain(G.borrowNote[string.lower(tostring(info.icon))] or "not tried yet (hover the skill first)"));
+	end
 	if ( not idx and GetNumSpellTabs and GetSpellTabInfo and GetSpellName ) then
 		local word = string.lower(string.gsub(tostring(e.key), "_.*$", ""));
 		local shown = 0;
@@ -496,7 +642,7 @@ function G.SkillBookReport(b)
 			end
 		end
 		if ( shown == 0 ) then
-			G.Print("  nothing in the spellbook looks like '" .. G.Plain(word) .. "': the game has no tooltip text for it, ours is shown");
+			G.Print("  nothing in the spellbook looks like '" .. G.Plain(word) .. "': the spellbook has no text for it");
 		end
 	end
 end
@@ -538,6 +684,14 @@ local function SpellTooltip(tt, b)
 	end
 	-- not in a book: the game's tooltip of the spell by its id
 	if ( SetByLink(tt, e, ( info and info.name ) or Pretty(e.key)) ) then
+		if ( rem > 0.05 ) then
+			tt:AddLine(string.format("Ready in %.1f sec", rem), 1, 0.4, 0.4);
+		end
+		tt:AddLine("Casts automatically", 0.6, 0.6, 0.6);
+		return;
+	end
+	-- the text the game's own icon of the skill shows
+	if ( BorrowTip(tt, b, info and info.icon, ( info and info.name ) or Pretty(e.key)) ) then
 		if ( rem > 0.05 ) then
 			tt:AddLine(string.format("Ready in %.1f sec", rem), 1, 0.4, 0.4);
 		end
