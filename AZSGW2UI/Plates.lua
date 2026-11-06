@@ -234,6 +234,9 @@ local function SpecialKind(name)
 	if ( type(list) ~= "table" ) then
 		return nil, false;
 	end
+	if ( G.UnitsStale() ) then
+		return nil, true;                                     -- the list is the run before's: this run has none up yet
+	end
 	local best = nil;
 	for i = 1, table.getn(list) do
 		local u = list[i];
@@ -253,7 +256,7 @@ end
 local function SpecialHealth(name)
 	local found, count = nil, 0;
 	local list = AZS_UNITS;
-	if ( list ) then
+	if ( list and not G.UnitsStale() ) then
 		for i = 1, table.getn(list) do
 			if ( list[i].name == name ) then
 				found = list[i];
@@ -306,12 +309,45 @@ local function ReadHeroes()
 	end
 end
 
--- does a friendly plate get drawn: heroes always, totems and pets as the options say
-local function FriendShown(name)
-	if ( heroNames[name] ) then
+-- a totem is known by "Totem" in its name (whatever case, a rank after it does not matter), or by the name of one of your
+-- totems in the API's list (the plate may carry a rank the list does not, or the other way round)
+local function IsTotemName(name)
+	if ( totemNames[name] ) then
 		return true;
 	end
-	if ( totemNames[name] or string.find(name, "Totem", 1, true) ) then
+	local l = string.lower(name);
+	if ( string.find(l, "totem", 1, true) or string.find(l, "t\195\179tem", 1, true) ) then
+		return true;
+	end
+	if ( string.len(l) >= 5 ) then
+		for tn in pairs(totemNames) do
+			local lt = string.lower(tn);
+			if ( string.len(lt) >= 5 and ( string.find(l, lt, 1, true) or string.find(lt, l, 1, true) ) ) then
+				return true;
+			end
+		end
+	end
+	return false;
+end
+
+-- what a friendly plate is: "hero", "totem" or "pet" (a pet, summon or any other friendly creature)
+local function FriendClass(name)
+	if ( heroNames[name] ) then
+		return "hero";
+	end
+	if ( IsTotemName(name) ) then
+		return "totem";
+	end
+	return "pet";
+end
+
+-- does a friendly plate get drawn: heroes always, pets as the option says, totems unless they are hidden
+local function FriendShown(name)
+	local c = FriendClass(name);
+	if ( c == "hero" ) then
+		return true;
+	end
+	if ( c == "totem" ) then
 		return G.Opt("friendTotems");
 	end
 	return G.Opt("friendPets");
@@ -687,6 +723,32 @@ function G.PlatesReport()
 			end
 		end
 	end
+	-- the plates up: what each one is taken for (enemy, neutral, a hero, a totem or a pet) and whether we draw it
+	ReadHeroes();
+	local said = 0;
+	for i = 1, table.getn(P.list) do
+		local p = P.list[i];
+		if ( said < 8 and p.frame:IsShown() and p.rawName and p.rawName ~= "" ) then
+			said = said + 1;
+			local r, g, b = p.hb:GetStatusBarColor();
+			local what, drawn = nil, nil;
+			if ( p.enemy ) then
+				what = p.neutral and "neutral" or "enemy";
+				drawn = G.Opt("nameplates") and ( p.elite or not G.Opt("platesElite") );
+			else
+				what = FriendClass(p.rawName);
+				drawn = G.Opt("platesFriend") and FriendShown(p.rawName);
+			end
+			G.Print("  plate " .. G.Plain(p.rawName) .. ": taken for " .. what .. ", drawn " .. ( drawn and "yes" or "no" )
+				.. ", game's bar colour " .. string.format("%.2f %.2f %.2f", r or 0, g or 0, b or 0));
+		end
+	end
+	local tn = {};
+	for n in pairs(totemNames) do
+		table.insert(tn, n);
+	end
+	G.Print("your totems by the API: " .. ( table.getn(tn) > 0 and G.Plain(table.concat(tn, ", ")) or "none" ) .. "; hiding totems: "
+		.. ( G.Opt("friendTotems") and "no" or "yes" ));
 	G.Print("marks " .. ( G.Opt("marks") and "on" or "off" ) .. ", set " .. ( G.marksSet or 0 ) .. " so far, SetRaidTargetIcon "
 		.. tostring( ( SetRaidTargetIcon or SetRaidTarget ) ~= nil ) .. ", GetRaidTargetIndex " .. tostring(GetRaidTargetIndex ~= nil));
 	if ( table.getn(P.list) == 0 ) then

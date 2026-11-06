@@ -219,16 +219,17 @@ impl.SetOwner = function(self, f, a)
 	assert(type(f) == "table" and type(a) == "string")
 	self.tipText = nil
 	self.anchor = a
+	self.owner = f
 	if self._name == "AZSGW2ScanTip" then return end
 	tipLines = {}; lastSetSpell = nil
 end
 impl.SetSpell = function(self, idx, book)
-	assert(type(idx) == "number" and book == "spell", "SetSpell args")
+	assert(type(idx) == "number" and (book == "spell" or book == "pet"), "SetSpell args")
 	local nm = self._name
 	if nm == "AZSGW2ScanTip" or nm == "GameTooltip" then
 		scanCalls = scanCalls + 1
 		-- like the game: the tooltip is filled and shown; its lines are GameTooltipTextLeft1, 2, ...
-		local lines = spellTipText[idx] or { (GetSpellName(idx, "spell")) }
+		local lines = spellTipText[book == "pet" and ("pet" .. idx) or idx] or { (GetSpellName(idx, book)) }
 		if scanBlind and self.anchor == "ANCHOR_NONE" then lines = { lines[1] } end
 		self.tipText = lines
 		self.shown = true
@@ -241,10 +242,13 @@ impl.SetSpell = function(self, idx, book)
 	lastSetSpell = { idx, book }; tipLines = { "(game tooltip)" }
 end
 impl.NumLines = function(self) return self.tipText and #self.tipText or 0 end
+impl.GetOwner = function(self) return self.owner end
+impl.ClearLines = function(self) self.tipText = nil; if self._name == "GameTooltip" then tipLines = {} end end
 local book = { { "Frostbolt", "Rank 2" }, { "Frostbolt", "Rank 3" }, { "Blizzard", "Rank 1" } }
 function GetNumSpellTabs() return 1 end
 function GetSpellTabInfo(t) return "General", "tex", 0, #book end
-function GetSpellName(i, b) assert(b == "spell"); local e = book[i]; if e then return e[1], e[2] end end
+petBook = {}            -- the pet's own spellbook (empty unless a test fills it)
+function GetSpellName(i, b) assert(b == "spell" or b == "pet"); local e = (b == "pet" and petBook or book)[i]; if e then return e[1], e[2] end end
 
 function CreateFrame(kind, name, parent, template)
 	assert(kind == "Frame" or kind == "Button" or kind == "PlayerModel" or kind == "StatusBar" or kind == "GameTooltip", "CreateFrame kind " .. tostring(kind))
@@ -626,6 +630,37 @@ scenario("stock frames + HUD enforcement", function()
 	print("stock frames hidden, OnShow hook ok, HUD enforcement ok")
 	print("detected bindings:", G.FindBinding("talents"), G.FindBinding("character"), "|", G.BindingText("talents"))
 	assert(G.FindBinding("talents") == "AZS_OPEN_TALENTS" and G.FindBinding("character") == "TOGGLECHARACTER0")
+end)
+
+scenario("/gw2 off gives the game's own HUD and bars back", function()
+	-- the game wants its action bar up while it is kept hidden (and the target frame, which follows a target)
+	stockFrames.MainMenuBar.shown = true; stockFrames.MainMenuBar.scripts.OnShow()
+	stockFrames.TargetFrame.shown = true; stockFrames.TargetFrame.scripts.OnShow()
+	assert(stockFrames.MainMenuBar.shown == false and stockFrames.TargetFrame.shown == false)
+	G.keptHidden.MainMenuBar.was = false      -- it was not up when it was first taken (the game shows it later, when a run starts)
+	G.keptHidden.TargetFrame.was = false      -- no target at the time
+	assert(hud.build == false and cvars.hudBuild == "0", "the spells row is not hidden while the UI is on")
+	SlashCmdList["AZSGW2"]("off")
+	for _, p in ipairs(G.HUD_PARTS) do assert(hud[p] == true, "HUD part not given back: " .. p) end
+	assert(cvars.hudBuild == "1", "the setting behind the spells row was left at 0")
+	assert(stockFrames.MainMenuBar.shown == true, "the action bar of the game is not back")
+	assert(stockFrames.TargetFrame.shown == false, "the target frame is left to the game")
+	-- the game puts the spells row away again: it is given back within a second
+	hud.build = false; cvars.hudBuild = "0"
+	runTicks(14, 0.05)
+	assert(hud.build == true and cvars.hudBuild == "1", "the spells row stays hidden after /gw2 off")
+	-- the watch ends after a few seconds: the game's own settings are not fought for ever
+	runTicks(160, 0.05)
+	hud.build = false; cvars.hudBuild = "0"
+	runTicks(20, 0.05)
+	assert(hud.build == false, "the HUD is fought for ever")
+	hud.build = true; cvars.hudBuild = "1"
+	-- /gw2 on takes it all again
+	SlashCmdList["AZSGW2"]("on")
+	runTicks(14, 0.05)
+	for _, p in ipairs(G.HUD_PARTS) do assert(hud[p] == false, "HUD part not hidden again: " .. p) end
+	assert(stockFrames.MainMenuBar.shown == false, "action bar not hidden again after /gw2 on")
+	print("/gw2 off gives the HUD back, /gw2 on takes it again")
 end)
 
 scenario("nameplates + native messages", function()
@@ -1212,9 +1247,24 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	assert(ph.v.shown and ph2.v.shown and pt.v.shown and ps.v.shown, "heroes or totems lost their plates with the pets option off")
 	assert(wolf.hb:GetAlpha() == 0, "the game's own plate of a pet shows")
 	-- totems off too: both kinds of totem (by the API's list and by the name) go, heroes stay
-	SlashCmdList["AZSGW2"]("plates totems off")
+	SlashCmdList["AZSGW2"]("plates hidetotems on")
 	runTicks(8, 0.1)
 	assert(not pw.v.shown and not pt.v.shown and not ps.v.shown and ph.v.shown and ph2.v.shown, "both off: only heroes should stay")
+	-- more ways a totem is named: a rank after the API's name, any case, other languages
+	AZS_TOTEMS = { { key = "stoneclaw_totem", name = "Stoneclaw" }, { key = "searing_totem", name = "Searing Totem" } }
+	local t5, t6, t7 = nativePlate("Searing Totem V", 100, GREEN, false), nativePlate("healing ward TOTEM", 100, GREEN, false), nativePlate("T\195\179tem de Piedra", 100, GREEN, false)
+	for _, pl in ipairs({ t5, t6, t7 }) do show(pl) end
+	runTicks(14, 0.1)
+	assert(not t5.frame.azsPlate.v.shown and not t6.frame.azsPlate.v.shown and not t7.frame.azsPlate.v.shown, "a totem with a rank / another case / another language keeps its plate")
+	assert(t5.hb:GetAlpha() == 0, "the game's own plate of a totem shows")
+	SlashCmdList["AZSGW2"]("plates hidetotems off"); runTicks(8, 0.1)
+	assert(t5.frame.azsPlate.v.shown and t6.frame.azsPlate.v.shown and t7.frame.azsPlate.v.shown, "totems did not come back with hide totems off")
+	SlashCmdList["AZSGW2"]("plates hidetotems on"); runTicks(8, 0.1)
+	assert(not t5.frame.azsPlate.v.shown, "hide totems on")
+	-- /gw2 plates debug says what each friendly plate is taken for
+	SlashCmdList["AZSGW2"]("plates debug")
+	for _, pl in ipairs({ t5, t6, t7 }) do pl.frame.shown = false end
+	AZS_TOTEMS = { { key = "stoneclaw_totem", name = "Stoneclaw" } }
 	-- pets back on, totems still off
 	SlashCmdList["AZSGW2"]("plates pets on")
 	runTicks(8, 0.1)
@@ -1222,8 +1272,8 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	-- the settings rows work the same
 	local rows = {}
 	for _, c in ipairs(G.settings.checks) do rows[c.row.label] = c end
-	assert(rows["   show pets and summons"] and rows["   show totems"], "settings rows for pets and totems missing")
-	rows["   show totems"].scripts.OnClick()
+	assert(rows["   show pets and summons"] and rows["   hide totems"], "settings rows for pets and totems missing")
+	rows["   hide totems"].scripts.OnClick()
 	assert(G.Opt("friendTotems") == true, "the totems row does not switch it")
 	runTicks(8, 0.1)
 	assert(pt.v.shown and ps.v.shown and pw.v.shown, "totems did not come back")
@@ -1352,7 +1402,7 @@ scenario("settings window + unlock layout", function()
 	local labels = {}
 	for _, c in ipairs(f.checks) do labels[c.row.label] = true end
 	assert(labels["   only elites and guardians"] and labels["Enable friendly nameplates"] and labels["Max targets, on the skills"]
-		and labels["   show pets and summons"] and labels["   show totems"] and labels["Mark bosses and guardians"], "settings rows missing")
+		and labels["   show pets and summons"] and labels["   hide totems"] and labels["Mark bosses and guardians"], "settings rows missing")
 	assert(f:GetHeight() <= 640, "settings window too tall: " .. f:GetHeight())
 	-- minimap switch detaches and re-attaches the game's minimap
 	for _, c in ipairs(f.checks) do if c.row.label == "GW2 minimap" then c.scripts.OnClick() end end
@@ -1833,6 +1883,75 @@ scenario("skills: the most targets a skill can hit, from its tooltip", function(
 	print("max targets chip ok")
 end)
 
+scenario("skills: tooltips of pet abilities, and the timer ticks while hovering", function()
+	local saved = {}
+	for i = 1, 7 do saved[i] = AZS_SPELLS[i] end
+	-- Kill Command lives in the pet's book; Demonic Empowerment is there but the game has nothing to say about it; the third is in no book
+	petBook = { { "Kill Command", "Rank 1" }, { "Demonic Empowerment", "Rank 1" } }
+	spellTipText.pet1 = { "Kill Command", "Your pet strikes at once.", "Pounds the 3 nearest enemies." }
+	spellTipText.pet2 = {}
+	AZS_SPELLS[2] = { key = "kill_command", spell = 2, rank = 1, cd = 0, cdmax = 6 }
+	AZS_SPELLS[3] = { key = "demonic_empowerment", spell = 3, rank = 1, cd = 0, cdmax = 60 }
+	AZS_SPELLS[5] = { key = "unknown_pet_skill", spell = 5, rank = 1, cd = 0, cdmax = 20 }
+	AZS_SPELLS_UPDATED = (AZS_SPELLS_UPDATED or 0) + 1
+	runTicks(40, 0.1)
+	local s2, s3, s5 = G.slots[2], G.slots[3], G.slots[5]
+	s2.scripts.OnEnter()
+	assert(lastSetSpell and lastSetSpell[2] == "pet" and lastSetSpell[1] == 1, "the pet's book was not used for Kill Command: " .. tostring(lastSetSpell and lastSetSpell[2]))
+	assert(GameTooltip.shown, "no tooltip for Kill Command")
+	s2.scripts.OnLeave()
+	s3.scripts.OnEnter()
+	local function lines() return table.concat(tipLines, " | ") end
+	assert(GameTooltip.shown and string.find(lines(), "Demonic Empowerment", 1, true) and string.find(lines(), "Casts automatically", 1, true), "no own tooltip when the game has no text: " .. lines())
+	s3.scripts.OnLeave()
+	s5.scripts.OnEnter()
+	assert(GameTooltip.shown and string.find(lines(), "Unknown Pet Skill", 1, true), "no tooltip for a skill in no book: " .. lines())
+	s5.scripts.OnLeave()
+	-- the number of targets of a pet skill is read from the pet's book too
+	s2.tgtKey = nil; runTicks(12, 0.1)
+	assert(s2.hitChip.shown and s2.hitText.text == "3", "targets of a pet skill: " .. tostring(s2.hitText.text))
+	petBook = {}
+	for i = 1, 7 do AZS_SPELLS[i] = saved[i] end
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(40, 0.1)
+
+	-- the "Ready in" line counts down while the mouse stays on the skill, and goes when the skill is ready
+	AZS_SPELLS[4] = { key = "blizzard", spell = 4, rank = 1, cd = 4, cdmax = 10 }
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(6, 0.05)
+	local b4 = G.slots[4]
+	local function readyLine()
+		for _, l in ipairs(tipLines) do if string.find(l, "^Ready in") then return l end end
+		return nil
+	end
+	b4.scripts.OnEnter()
+	local r1 = readyLine()
+	assert(r1, "no Ready line while cooling down: " .. lines())
+	runTicks(20, 0.05)                                    -- one second
+	local r2 = readyLine()
+	assert(r2 and r2 ~= r1, "the Ready in line did not move: " .. tostring(r1) .. " -> " .. tostring(r2))
+	local n1 = tonumber(string.match(r1, "([%d%.]+)")); local n2 = tonumber(string.match(r2, "([%d%.]+)"))
+	assert(n2 < n1 - 0.5 and n2 > n1 - 1.5, "wrong step: " .. n1 .. " -> " .. n2)
+	runTicks(80, 0.05)                                    -- the skill is ready by now
+	assert(readyLine() == nil and GameTooltip.shown, "the line stays after the skill is ready: " .. lines())
+	-- no needless redrawing while nothing counts
+	local c = scanCalls
+	runTicks(40, 0.05)
+	assert(scanCalls == c, "the tooltip is drawn again although nothing counts down")
+	-- leaving the skill stops it
+	b4.scripts.OnLeave()
+	assert(not GameTooltip.shown and G.liveTip == nil, "the live tooltip outlives the hover")
+	-- a cooldown that starts while the mouse is there shows up
+	b4.scripts.OnEnter()
+	AZS_SPELLS[4].cd = 3; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(10, 0.05)
+	assert(readyLine(), "a new cooldown does not show on a tooltip that is up")
+	b4.scripts.OnLeave()
+	AZS_SPELLS[4].cd = 0; AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(6, 0.05)
+	print("pet tooltips and the live timer ok")
+end)
+
 scenario("cooldown counts down", function()
 	local before = G.slots[6].cdText.text
 	runTicks(40, 0.05)   -- 2 s
@@ -2171,6 +2290,31 @@ scenario("character panel", function()
 	SlashCmdList["AZSGW2"]("char on"); assert(G.Opt("charPanel"))
 end)
 
+
+scenario("boss bars: the lists of the run before are not shown", function()
+	local c = G.bossFrame
+	runTicks(4, 0.1)
+	assert(c.rows[1].shown, "the bars show a run's bosses")
+	-- a new run begins: the game still holds the old list (its stamp is older than the run's)
+	AZS_ZONE_UPDATED = 100; AZS_UNITS_UPDATED = 50
+	runTicks(4, 0.1)
+	assert(not c.rows[1].shown and not c.rows[2].shown, "the bars of the run before stay up")
+	-- the new run's list comes
+	AZS_UNITS_UPDATED = 120
+	runTicks(4, 0.1)
+	assert(c.rows[1].shown, "the bars do not come with the new list")
+	-- before the run starts the tables are the last run's too
+	phase = "ready"; runTicks(4, 0.1)
+	assert(not c.rows[1].shown, "bars shown before a run")
+	phase = "playing"; runTicks(4, 0.1)
+	assert(c.rows[1].shown)
+	-- the elite filter of the plates and the target bar read the same list
+	AZS_UNITS = { { kind = "elite", id = 1, name = "Old Warden", hp = 10, hpm = 100, state = 0 } }
+	AZS_UNITS_UPDATED = 60
+	assert(G.UnitsStale() == true, "an old list is not stale")
+	AZS_ZONE_UPDATED = nil; AZS_UNITS_UPDATED = nil; AZS_UNITS = nil
+	assert(G.UnitsStale() == false)
+end)
 
 scenario("boss list header", function()
 	local c = G.bossFrame

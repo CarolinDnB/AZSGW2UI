@@ -301,9 +301,11 @@ function G.SpellRemaining(entry, now)
 end
 
 -- the position of a spell in the spellbook, found by name (and rank when there is one): the game's own tooltip for
--- it (description, cost, range, cast time) can be shown with SetSpell. nil when the spell is not in the book.
+-- it (description, cost, range, cast time) can be shown with SetSpell. A spell of your pet (Kill Command is one of them
+-- in some builds) is in the pet's own book. Returns the position and the book ("spell" or "pet"); nil when the spell is
+-- in neither.
 local function BookIndex(name, rank)
-	if ( not ( name and GetNumSpellTabs and GetSpellTabInfo and GetSpellName ) ) then
+	if ( not ( name and GetSpellName ) ) then
 		return nil;
 	end
 	local last, exact = nil, nil;
@@ -311,21 +313,42 @@ local function BookIndex(name, rank)
 	if ( rank and rank > 0 ) then
 		want = "Rank " .. rank;
 	end
-	for tab = 1, GetNumSpellTabs() do
-		local _, _, offset, count = GetSpellTabInfo(tab);
-		if ( offset and count ) then
-			for i = offset + 1, offset + count do
-				local n, r = GetSpellName(i, "spell");
-				if ( n == name ) then
-					last = i;
-					if ( want and r == want ) then
-						exact = i;
+	if ( GetNumSpellTabs and GetSpellTabInfo ) then
+		for tab = 1, GetNumSpellTabs() do
+			local _, _, offset, count = GetSpellTabInfo(tab);
+			if ( offset and count ) then
+				for i = offset + 1, offset + count do
+					local n, r = GetSpellName(i, "spell");
+					if ( n == name ) then
+						last = i;
+						if ( want and r == want ) then
+							exact = i;
+						end
 					end
 				end
 			end
 		end
 	end
-	return exact or last;
+	if ( exact or last ) then
+		return exact or last, "spell";
+	end
+	-- the pet's book: it ends at the first position with no spell
+	for i = 1, 150 do
+		local ok, n, r = pcall(GetSpellName, i, "pet");
+		if ( not ok or not n ) then
+			break;
+		end
+		if ( n == name ) then
+			last = i;
+			if ( want and r == want ) then
+				exact = i;
+			end
+		end
+	end
+	if ( exact or last ) then
+		return exact or last, "pet";
+	end
+	return nil;
 end
 
 -- "arcane_missiles" -> "Arcane Missiles", for a spell the loadout has no name for
@@ -333,6 +356,21 @@ local function Pretty(key)
 	local t = string.gsub(tostring(key), "_", " ");
 	t = string.gsub(t, "(%a)(%a*)", function(a, rest) return string.upper(a) .. rest; end);
 	return t;
+end
+
+-- where the spell of a skill stands in a spellbook: by the name the loadout gives, else by its key written as a name
+-- ("kill_command" -> "Kill Command"), in the spellbook and then in the pet's book. Returns the position and the book.
+local function FindSpell(e)
+	local info = G.abilityInfo[e.key];
+	local rank = math.floor(G.Num(e.rank));
+	local idx, book = nil, nil;
+	if ( info and info.name ) then
+		idx, book = BookIndex(info.name, rank);
+	end
+	if ( not idx ) then
+		idx, book = BookIndex(Pretty(e.key), rank);
+	end
+	return idx, book;
 end
 
 local function SpellTooltip(tt, b)
@@ -346,17 +384,21 @@ local function SpellTooltip(tt, b)
 	end
 	local info = G.abilityInfo[e.key];
 	local rem = G.SpellRemaining(e);
+	b.tipRem = rem;                  -- what the tooltip says now: it is drawn again while the time counts down (see G.Tooltip)
 	G.hoverSlot = b;                 -- the number of targets in this tooltip is read for the chip (see UpdateTargets)
-	-- the game's own spell tooltip when the spell is in the spellbook
-	local idx = BookIndex(info and info.name, math.floor(G.Num(e.rank)));
+	-- the game's own spell tooltip when the spell is in a spellbook
+	local idx, book = FindSpell(e);
 	if ( idx and tt.SetSpell ) then
-		local ok = pcall(tt.SetSpell, tt, idx, "spell");
-		if ( ok ) then
+		local ok = pcall(tt.SetSpell, tt, idx, book);
+		if ( ok and ( not tt.NumLines or tt:NumLines() > 0 ) ) then
 			if ( rem > 0.05 ) then
 				tt:AddLine(string.format("Ready in %.1f sec", rem), 1, 0.4, 0.4);
 			end
 			tt:AddLine("Casts automatically", 0.6, 0.6, 0.6);
 			return;
+		end
+		if ( tt.ClearLines ) then
+			tt:ClearLines();         -- the game had nothing to say about it: the lines below are the tooltip
 		end
 	end
 	tt:AddLine((info and info.name) or Pretty(e.key), G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
@@ -373,6 +415,15 @@ local function SpellTooltip(tt, b)
 		tt:AddLine("Ready", 0.4, 1, 0.4);
 	end
 	tt:AddLine("Casts automatically", 0.6, 0.6, 0.6);
+end
+
+-- does the tooltip of a skill have to be drawn again: while its time counts down, and once more when it has come to zero
+local function TipNeedsRedraw(b)
+	local e = b.entry;
+	if ( not e ) then
+		return false;
+	end
+	return G.SpellRemaining(e) > 0.05 or ( b.tipRem or 0 ) > 0.05;
 end
 
 ------------------------------------------------------------------------ actions of the two small buttons
@@ -423,7 +474,9 @@ function G.BuildSkills()
 	local function Hook(b)
 		G.Tooltip(b, function(tt)
 			SpellTooltip(tt, b);
-		end, "ANCHOR_TOP");
+		end, "ANCHOR_TOP", function()
+			return TipNeedsRedraw(b);
+		end);
 		SetEmpty(b);
 		G.Register(b);
 	end
@@ -453,7 +506,9 @@ function G.BuildSkills()
 	racial:SetPoint("RIGHT", G.slots[1], "LEFT", -OUTER, 0);
 	G.Tooltip(racial, function(tt)
 		SpellTooltip(tt, racial);
-	end, "ANCHOR_TOP");
+	end, "ANCHOR_TOP", function()
+		return TipNeedsRedraw(racial);
+	end);
 	SetEmpty(racial);
 	G.racial = racial;
 	G.Register(racial);
@@ -866,20 +921,20 @@ end
 -- a skill other than before: nothing of the earlier one is kept
 local function ForgetSkill(b, key)
 	b.tgtKey = key;
-	b.bookIdx, b.bookAt = nil, nil;
+	b.bookIdx, b.bookBook, b.bookAt = nil, nil, nil;
 	b.scanN, b.scanLine, b.scanSeen = nil, nil, nil;
 	b.hoverN, b.hoverBase, b.hoverBlind = nil, nil, nil;
 end
 
 -- shows the tooltip for the spell at book entry idx, reads its lines, hides it again; nil when no tooltip is free
-local function ScanSpell(b, idx)
+local function ScanSpell(b, idx, book)
 	local tt, prefix = FreeTip();
 	if ( not tt ) then
 		return nil;
 	end
 	pcall(tt.SetOwner, tt, b, "ANCHOR_NONE");
 	local lines = {};
-	if ( pcall(tt.SetSpell, tt, idx, "spell") ) then
+	if ( pcall(tt.SetSpell, tt, idx, book or "spell") ) then
 		if ( tt.Show ) then
 			tt:Show();
 		end
@@ -906,17 +961,14 @@ local function ReadTargets(b, dump)
 	end
 	-- where the skill stands in the spellbook: looked up once per skill and rank. Until the loadout has told the skill's
 	-- name, and for a skill that is not in the book, it is tried again every few seconds, not every look.
-	if ( not b.bookIdx ) then
-		local info = G.abilityInfo[e.key];
-		if ( info and info.name and now - ( b.bookAt or -100 ) >= 5 ) then
-			b.bookAt = now;
-			b.bookIdx = BookIndex(info.name, math.floor(G.Num(e.rank)));
-		end
+	if ( not b.bookIdx and now - ( b.bookAt or -100 ) >= 5 ) then
+		b.bookAt = now;
+		b.bookIdx, b.bookBook = FindSpell(e);
 	end
 	local n = 0;
 	b.scanLine = nil;
 	if ( b.bookIdx ) then
-		local lines = ScanSpell(b, b.bookIdx);
+		local lines = ScanSpell(b, b.bookIdx, b.bookBook);
 		if ( not lines ) then
 			return false;
 		end

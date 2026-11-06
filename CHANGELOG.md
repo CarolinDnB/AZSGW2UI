@@ -1,5 +1,16 @@
 # AZS GW2 UI: Changelog
 
+## 1.9.1
+
+**Changed**
+- **Friendly nameplates: "hide totems"** replaces "show totems" (settings, and `/gw2 plates hidetotems on | off`). It is the same setting as before, so an earlier choice carries over. Totems are now recognised more reliably: a rank after the name, any capital letters, other languages, and the names in the API's list of your totems. `/gw2 plates debug` lists what each plate is taken for (enemy, neutral, hero, totem or pet) and whether it is drawn, so a plate that is taken for the wrong thing can be reported.
+
+**Fixed**
+- **No tooltip on pet abilities** (Kill Command, Demonic Empowerment). They are now looked up in the pet's own spellbook too, and by their name when the loadout does not give one. If the game has no text for a spell, the skill shows its own tooltip (name, rank, cooldown) instead of nothing.
+- **The "Ready in" time on a skill's tooltip did not move** while you hovered the skill. It counts down now, and the line goes when the skill is ready.
+- **`/gw2 off` hid your abilities.** The game's own HUD parts were given back but the settings behind them (the ones this UI forces to "hidden") were not, so the spells row stayed off. They are all given back now and watched for a few seconds, and the game's own action bar comes back even when it was not up the moment this UI first took it.
+- **Health bars of guardians and bosses stayed up in the next run** when a run ended while they were alive. The game keeps its last list until new data arrives; lists older than the current run are not shown now (also for the nameplates' elite filter and the target bar).
+
 ## 1.9.0
 
 **New**

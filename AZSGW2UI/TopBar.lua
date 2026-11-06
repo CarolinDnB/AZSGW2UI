@@ -648,7 +648,8 @@ function G.UpdateBosses(dt)
 		return;
 	end
 	local list = {};
-	if ( AZS_GetBosses ) then
+	local stale = G.UnitsStale();            -- the lists of the run before are not shown (the game keeps them until new ones come)
+	if ( AZS_GetBosses and not stale ) then
 		local bosses = AZS_GetBosses() or {};
 		for i = 1, table.getn(bosses) do
 			local b = bosses[i];
@@ -663,7 +664,7 @@ function G.UpdateBosses(dt)
 		end
 	end
 	local bossCount = table.getn(list);
-	if ( AZS_GetGuardians ) then
+	if ( AZS_GetGuardians and not stale ) then
 		local guards = AZS_GetGuardians() or {};
 		for i = 1, table.getn(guards) do
 			local g = guards[i];
@@ -831,7 +832,7 @@ end
 local function SpecialByName(name)
 	local found, count = nil, 0;
 	local list = AZS_UNITS;
-	if ( list ) then
+	if ( list and not G.UnitsStale() ) then
 		for i = 1, table.getn(list) do
 			if ( list[i].name == name ) then
 				found = list[i];

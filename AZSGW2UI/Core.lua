@@ -244,6 +244,21 @@ function G.RunTime()
 	return 0;
 end
 
+-- The game's tables keep the last run's values until the new run changes them. The list of special enemies (AZS_UNITS,
+-- and the bosses / guardians that come from it) that was last changed before this run began, or while no run is on, is
+-- the old run's: it is not shown, so the health bars of a guardian from the run before do not stay up in a new run.
+function G.UnitsStale()
+	local ph = G.Phase();
+	if ( ph == nil or ph == "ready" ) then
+		return true;
+	end
+	local u, z = AZS_UNITS_UPDATED, AZS_ZONE_UPDATED;
+	if ( type(u) == "number" and type(z) == "number" and u < z ) then
+		return true;
+	end
+	return false;
+end
+
 ------------------------------------------------------------------------ frames
 
 -- Size: the global size (/gw2 scale, the settings window) times the frame's own size. A frame's own size
@@ -542,9 +557,13 @@ end
 
 ------------------------------------------------------------------------ tooltips / dragging
 
-function G.Tooltip(frame, func, anchor)
+-- live: a function that says whether the tooltip has to be drawn again right now (a countdown in it); it is then drawn
+-- again ten times a second while the mouse stays on the frame (G.UpdateLiveTip)
+G.liveTip = nil;
+
+function G.Tooltip(frame, func, anchor, live)
 	frame:EnableMouse(true);
-	frame:SetScript("OnEnter", function()
+	local function Fill()
 		GameTooltip:SetOwner(frame, anchor or "ANCHOR_TOP");
 		local ok, err = pcall(func, GameTooltip);
 		if ( not ok and not G.tipFailed ) then
@@ -552,10 +571,37 @@ function G.Tooltip(frame, func, anchor)
 			G.Print("tooltip error: " .. tostring(err));
 		end
 		GameTooltip:Show();
+	end
+	frame:SetScript("OnEnter", function()
+		Fill();
+		if ( live ) then
+			G.liveTip = { frame = frame, fill = Fill, need = live };
+		else
+			G.liveTip = nil;
+		end
 	end);
 	frame:SetScript("OnLeave", function()
+		if ( G.liveTip and G.liveTip.frame == frame ) then
+			G.liveTip = nil;
+		end
 		GameTooltip:Hide();
 	end);
+end
+
+function G.UpdateLiveTip(dt)
+	local t = G.liveTip;
+	if ( not t ) then
+		return;
+	end
+	if ( not GameTooltip:IsShown() or ( MouseIsOver and not MouseIsOver(t.frame) )
+		or ( GameTooltip.GetOwner and GameTooltip:GetOwner() ~= t.frame ) ) then
+		G.liveTip = nil;                                -- the tooltip is gone or someone else's now
+		return;
+	end
+	local ok, need = pcall(t.need);
+	if ( ok and need ) then
+		pcall(t.fill);
+	end
 end
 
 function G.ApplyPos(frame, key)
@@ -847,6 +893,15 @@ function G.HudList(restoring)
 	return list;
 end
 
+-- the game's own setting behind a HUD part ("hudBuild", ...): EnforceHud sets it to 0 while the part is hidden, so giving
+-- the part back gives the setting back too (a part shown with its setting at 0 is hidden again by the game)
+local function HudCvarOn(part)
+	local cvar = G.HUD_CVAR[part];
+	if ( cvar and SetCVar and GetCVar and GetCVar(cvar) == "0" ) then
+		SetCVar(cvar, "1");
+	end
+end
+
 function G.HideGameHud(hide)
 	if ( not AZS_SetHudShown ) then
 		return;
@@ -854,6 +909,33 @@ function G.HideGameHud(hide)
 	local list = G.HudList(not hide);
 	for i = 1, table.getn(list) do
 		AZS_SetHudShown(list[i], not hide);
+		if ( not hide ) then
+			HudCvarOn(list[i]);
+		end
+	end
+	if ( hide ) then
+		G.hudRestoreUntil = nil;
+	else
+		G.hudRestoreUntil = GetTime() + 6;       -- watched for a few seconds: the game may put a part back to hidden
+	end
+end
+
+-- after /gw2 off: for a few seconds every part of the game's HUD is checked and given back if it is not shown
+function G.CheckHudRestore()
+	local untilT = G.hudRestoreUntil;
+	if ( not untilT or not AZS_SetHudShown ) then
+		return;
+	end
+	if ( GetTime() > untilT ) then
+		G.hudRestoreUntil = nil;
+		return;
+	end
+	local list = G.HudList(true);
+	for i = 1, table.getn(list) do
+		if ( AZS_IsHudShown and not AZS_IsHudShown(list[i]) ) then
+			AZS_SetHudShown(list[i], true);
+		end
+		HudCvarOn(list[i]);
 	end
 end
 
@@ -869,9 +951,11 @@ function G.KeepHidden(name)
 		return;
 	end
 	if ( not G.keptHidden[name] ) then
-		G.keptHidden[name] = { frame = f, onshow = f:GetScript("OnShow"), was = f:IsShown() };
+		local info = { frame = f, onshow = f:GetScript("OnShow"), was = f:IsShown() };
+		G.keptHidden[name] = info;
 		local frame = f;
 		f:SetScript("OnShow", function()
+			info.wants = true;                    -- the game wanted it up while it was kept hidden: it comes back with /gw2 off
 			frame:Hide();
 		end);
 	end
@@ -943,6 +1027,7 @@ end
 
 function G.EnforceHidden()
 	if ( not AZSGW2DB or not AZSGW2DB.enabled ) then
+		G.CheckHudRestore();
 		return;
 	end
 	G.EnforceHud();
@@ -990,6 +1075,14 @@ function G.QuietMessages(on)
 end
 
 -- give some of the kept-hidden frames back (their old OnShow script, shown again if they were)
+-- The bars of the game's own UI (the action bar and its pieces, the player frame, the buffs) are shown whenever the game
+-- wanted them up while they were kept hidden, even when they were hidden at the moment they were first taken. The frames
+-- that follow a unit or a pet (target, party, pet bar, ...) are left to the game, which shows them when it has a unit.
+function G.WantsBack(name)
+	return string.find(name, "^MainMenu") ~= nil or string.find(name, "^ActionButton") ~= nil
+		or string.find(name, "^MultiBar") ~= nil or name == "PlayerFrame" or name == "BuffFrame";
+end
+
 function G.RestoreHiddenList(names)
 	for i = 1, table.getn(names) do
 		local info = G.keptHidden[names[i]];
@@ -997,7 +1090,7 @@ function G.RestoreHiddenList(names)
 			local f = info.frame;
 			if ( f and f.SetScript ) then
 				f:SetScript("OnShow", info.onshow);
-				if ( info.was ) then
+				if ( info.was or ( info.wants and G.WantsBack(names[i]) ) ) then
 					f:Show();
 				end
 			end

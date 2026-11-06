@@ -81,7 +81,7 @@ Unlocked, every frame gets a gold box with its name and size: drag it to move it
     /gw2 plates elite on | off        only elites and guardians
     /gw2 plates friends on | off      friendly nameplates
     /gw2 plates pets on | off         friendly plates for pets and summons (default on)
-    /gw2 plates totems on | off       friendly plates for totems (default on)
+    /gw2 plates hidetotems on | off   hide the friendly plates of totems (default off: totems get one)
     /gw2 targets [on | off]           the number of targets on the skills; alone: what each skill's tooltip says
     /gw2 marks on | off               mark bosses (skull) and guardians (cross) you target with the game's icons (default on)
     /gw2 plates debug                 what the nameplate frames look like, if no plate is recognised
@@ -170,6 +170,13 @@ load it, the game's own font is used.
 This is a fan made interface for Azeroth Survivors. It is not affiliated with or endorsed by ArenaNet, NCSOFT or Blizzard;
 "Guild Wars" is a trademark of ArenaNet / NCSOFT. The layout is inspired by Guild Wars 2's interface; all textures, icons and
 code here are original.
+
+## Changes in 1.9.1
+
+- Pet abilities (Kill Command, Demonic Empowerment) have a tooltip; the "Ready in" time on a skill's tooltip counts down while you hover it.
+- Friendly nameplates: "hide totems" instead of "show totems", totems are recognised more reliably; `/gw2 plates debug` shows what each plate is taken for.
+- `/gw2 off` gives the game's whole HUD back, the spells row included.
+- The health bars of guardians and bosses no longer stay up in a new run when the run before ended while they were alive.
 
 ## Changes in 1.9.0
 
