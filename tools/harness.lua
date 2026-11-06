@@ -2228,17 +2228,21 @@ scenario("skills: the game's own icon of a skill gives its text when no spellboo
 	local gameIcon = CreateFrame("Button", "FakeGameRockbiter", UIParent)
 	local gx = gameIcon:CreateTexture(nil, "ARTWORK"); gx:SetTexture(string.lower(icon))
 	local seenThis, left
+	local gameRights = { "Rank 1", "31 sec cooldown", "1.6 sec cooldown" }
 	gameIcon:SetScript("OnEnter", function()
 		seenThis = this
 		GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-		local lines = { "Rockbiter Weapon", "Imbue your weapon with the power of earth.", "Ready in 1.0 sec", "Rank 1" }
+		-- like the game's: the spell's own cooldown (left over from the 1.12 data) and the skill's real one
+		local lines = { "Rockbiter Weapon", "10 yd range", "Automatic", "Imbue your weapon with the power of earth.", "Ready in 1.0 sec",
+			"Your bonuses: -25% cooldown" }
+		local rights = gameRights
 		GameTooltip.tipText = lines
 		for i, t in ipairs(lines) do
 			local fs = _G["GameTooltipTextLeft" .. i] or new("FontString", GameTooltip, "GameTooltipTextLeft" .. i)
 			fs.fontSet = true; fs.text = t; fs.tcol = i == 1 and { 1, 0.82, 0 } or { 1, 1, 1 }
+			local rf = _G["GameTooltipTextRight" .. i] or new("FontString", GameTooltip, "GameTooltipTextRight" .. i)
+			rf.fontSet = true; rf.text = rights[i]; rf.tcol = { 0.5, 0.5, 0.5 }
 		end
-		local rf = _G["GameTooltipTextRight4"] or new("FontString", GameTooltip, "GameTooltipTextRight4")
-		rf.fontSet = true; rf.text = "Nature"; rf.tcol = { 0.5, 0.5, 0.5 }
 		GameTooltip.shown = true
 	end)
 	gameIcon:SetScript("OnLeave", function() left = true; GameTooltip:Hide() end)
@@ -2246,8 +2250,12 @@ scenario("skills: the game's own icon of a skill gives its text when no spellboo
 	b.scripts.OnEnter()
 	assert(seenThis == gameIcon, "the game's tooltip script was not run with its own frame as this")
 	assert(left, "its OnLeave was not run")
-	assert(tipLines[1] == "Rockbiter Weapon" and tipLines[2] == "Imbue your weapon with the power of earth.", "text: " .. table.concat(tipLines, " | "))
-	assert(tipLines[3] == "Rank 1 | Nature", "the right side of a line: " .. table.concat(tipLines, " | "))
+	assert(tipLines[1] == "Rockbiter Weapon | Rank 1", "title: " .. table.concat(tipLines, " | "))
+	-- one cooldown only: the skill's own (1.6), not the spell's 31
+	assert(tipLines[2] == "10 yd range" and tipLines[3] == "Automatic | 1.6 sec cooldown", "cooldowns: " .. table.concat(tipLines, " | "))
+	assert(tipLines[4] == "Imbue your weapon with the power of earth.", "text: " .. table.concat(tipLines, " | "))
+	assert(tipLines[5] == "Your bonuses: -25% cooldown", "a bonus line was taken for a cooldown: " .. table.concat(tipLines, " | "))
+	for _, t in ipairs(tipLines) do assert(not string.find(t, "31 sec"), "the wrong cooldown stayed: " .. t) end
 	assert(tipLines[#tipLines] == "Casts automatically", "no own last line: " .. table.concat(tipLines, " | "))
 	for _, t in ipairs(tipLines) do assert(not string.find(t, "Ready in 1.0"), "the game's own timer line was copied") end
 	assert(GameTooltip.shown and GameTooltip.owner == b, "the tooltip is not ours again")
@@ -2261,7 +2269,20 @@ scenario("skills: the game's own icon of a skill gives its text when no spellboo
 	-- hovering again: still there (the frame that worked is asked first, the others are not)
 	seenThis = nil
 	b.scripts.OnEnter()
-	assert(seenThis == gameIcon and tipLines[2] == "Imbue your weapon with the power of earth.")
+	assert(seenThis == gameIcon and tipLines[4] == "Imbue your weapon with the power of earth.")
+	b.scripts.OnLeave()
+	-- a single cooldown is left alone, in minutes too
+	gameRights = { "Rank 1", "2 min cooldown", nil }
+	b.scripts.OnEnter()
+	assert(tipLines[2] == "10 yd range | 2 min cooldown" and tipLines[3] == "Automatic", "a single cooldown was changed: " .. table.concat(tipLines, " | "))
+	b.scripts.OnLeave()
+	-- the skill does not know its cooldown: the shorter one stays
+	AZS_SPELLS[5] = { key = "rockbiter", spell = 8017, rank = 1, cd = 0, cdmax = 0 }
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(10, 0.05)
+	gameRights = { "Rank 1", "31 sec cooldown", "1.6 sec cooldown" }
+	b.scripts.OnEnter()
+	assert(tipLines[2] == "10 yd range" and tipLines[3] == "Automatic | 1.6 sec cooldown", "shortest: " .. table.concat(tipLines, " | "))
 	b.scripts.OnLeave()
 	-- the game's icon is gone: our own lines, remembered for a while and tried again later
 	gameIcon:Hide(); gameIcon:SetScript("OnEnter", nil)

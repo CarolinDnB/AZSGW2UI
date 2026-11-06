@@ -530,13 +530,89 @@ local function ReadLines(tt)
 	return lines;
 end
 
+-- the seconds a line says it takes to cool down ("31 sec cooldown", "1.5 min cooldown"), or nil. A bonus such as
+-- "-25% cooldown" is not one.
+local function CooldownOf(text)
+	if ( type(text) ~= "string" ) then
+		return nil;
+	end
+	local _, _, num, unit = string.find(string.lower(text), "([%d%.]+)%s+(%a+)%s+cooldown");
+	num = tonumber(num);
+	if ( not num or not unit ) then
+		return nil;
+	end
+	if ( string.find(unit, "^min") ) then
+		return num * 60;
+	elseif ( string.find(unit, "^h") ) then
+		return num * 3600;
+	end
+	return num;
+end
+
+-- The game's text can say two cooldowns (the spell's own, left over from the 1.12 data, and the skill's real one). The skill
+-- itself knows its cooldown (cdmax): the line closest to it stays, or the shortest one when it is not known; the others lose
+-- their cooldown (a line that has more to say keeps the rest).
+local function OneCooldown(lines, cdmax)
+	local found = {};
+	for i = 1, table.getn(lines) do
+		local L = lines[i];
+		local a, c = CooldownOf(L[1]), CooldownOf(L[5]);
+		if ( a ) then
+			table.insert(found, { i = i, side = 1, sec = a });
+		end
+		if ( c ) then
+			table.insert(found, { i = i, side = 5, sec = c });
+		end
+	end
+	if ( table.getn(found) < 2 ) then
+		return lines;
+	end
+	local best, bestScore = 1, nil;
+	for k = 1, table.getn(found) do
+		local score = found[k].sec;
+		if ( cdmax > 0 ) then
+			score = math.abs(found[k].sec - cdmax);
+		end
+		if ( not bestScore or score < bestScore ) then
+			best, bestScore = k, score;
+		end
+	end
+	local strip = {};
+	for k = 1, table.getn(found) do
+		if ( k ~= best ) then
+			strip[found[k].i] = strip[found[k].i] or {};
+			strip[found[k].i][found[k].side] = true;
+		end
+	end
+	local out = {};
+	for i = 1, table.getn(lines) do
+		local L = lines[i];
+		local st = strip[i];
+		if ( st and st[5] ) then
+			L[5] = nil;
+		end
+		if ( st and st[1] ) then
+			if ( L[5] and L[5] ~= "" ) then
+				L[1], L[2], L[3], L[4] = L[5], L[6], L[7], L[8];
+				L[5] = nil;
+			else
+				L = nil;
+			end
+		end
+		if ( L ) then
+			table.insert(out, L);
+		end
+	end
+	return out;
+end
+
 -- the time left and "casts automatically" are said by our own lines
 local function OwnLine(text)
 	local t = string.lower(text or "");
 	return string.find(t, "^ready in") ~= nil or string.find(t, "^casts automatically") ~= nil;
 end
 
-local function BorrowTip(tt, b, icon, name)
+local function BorrowTip(tt, b, icon, name, cdmax)
 	if ( borrowing or not G.tipFilling or type(icon) ~= "string" or icon == "" or not G.tipOwner
 		or not ( EnumerateFrames and tt.SetOwner and tt.NumLines ) ) then
 		return false;
@@ -579,7 +655,7 @@ local function BorrowTip(tt, b, icon, name)
 				end
 				this = keepThis;
 				if ( got and table.getn(got) >= 2 and got[1][1] ~= "" and LinkFits(got[1][1], name) ) then
-					lines = got;
+					lines = OneCooldown(got, cdmax or 0);
 					table.remove(list, i);
 					table.insert(list, 1, fr);               -- the one that worked is the first to ask next time
 					break;
@@ -691,7 +767,7 @@ local function SpellTooltip(tt, b)
 		return;
 	end
 	-- the text the game's own icon of the skill shows
-	if ( BorrowTip(tt, b, info and info.icon, ( info and info.name ) or Pretty(e.key)) ) then
+	if ( BorrowTip(tt, b, info and info.icon, ( info and info.name ) or Pretty(e.key), G.Num(e.cdmax)) ) then
 		if ( rem > 0.05 ) then
 			tt:AddLine(string.format("Ready in %.1f sec", rem), 1, 0.4, 0.4);
 		end
