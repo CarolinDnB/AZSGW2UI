@@ -933,7 +933,7 @@ function G.UpdateTarget(dt)
 		SetBadge(f, kind);
 		if ( kind == "elite" ) then
 			f.name:SetTextColor(1, 0.95, 0.78);              -- cream: gold would vanish on the gold bar
-			f.bar:SetColor(0.88, 0.56, 0.10);
+			f.bar:SetColor(G.COLOR_ELITE[1], G.COLOR_ELITE[2], G.COLOR_ELITE[3]);
 		elseif ( kind == "friend" ) then
 			-- a friend: the same bar in green, the name in the class colour (a hero) or soft green (a creature)
 			local token = nil;

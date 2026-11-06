@@ -8,7 +8,11 @@
 -- on them. The same plate that was a red bar with a border is now this one, at the same place. If the game's plates
 -- are not what this file expects, nothing is hidden and the game's own plates stay as they were.
 --
--- Options: Enable Nameplates (enemies), Only Elites and Guardians, Enable Friendly Nameplates.
+-- The game may give a plate's drawing back at any time (it reuses a plate for the next enemy), so the plate is looked at
+-- again: if the game made anything visible again, it is made invisible again.
+--
+-- Options: Enable Nameplates (enemies), Only Elites and Guardians, Enable Friendly Nameplates (and not for pets and totems).
+-- This file also marks bosses and guardians with the game's own raid icons when you target them (option "marks").
 
 local G = AZSGW2;
 
@@ -20,7 +24,8 @@ local IDENTIFY = 12;        -- a plate is read for name, kind and colour again e
 
 local COLOR_ENEMY = { 0.80, 0.14, 0.12 };
 local COLOR_NEUTRAL = { 0.86, 0.74, 0.18 };
-local COLOR_ELITE = { 0.88, 0.56, 0.10 };
+local COLOR_ELITE = G.COLOR_ELITE;                  -- orange: elites and guardians stand out among the red
+local NAME_ELITE = G.NAME_ELITE;
 local COLOR_FRIEND = { 0.30, 0.72, 0.22 };
 
 G.plates = { list = {}, seen = 0, cursor = 1, fresh = {}, active = false };
@@ -51,7 +56,8 @@ local function Adopt(frame)
 	if ( not hb or not hb.GetValue or not name or not name.GetText or not icon or not icon.IsShown ) then
 		return nil;
 	end
-	local p = { frame = frame, border = border, glow = glow, name = name, level = level, icon = icon, raid = raid, hb = hb, cast = cast };
+	local p = { frame = frame, border = border, glow = glow, name = name, level = level, icon = icon, raid = raid, hb = hb, cast = cast,
+		regs = { frame:GetRegions() } };
 	table.insert(P.list, p);
 	frame.azsPlate = p;
 	return p;
@@ -87,6 +93,31 @@ end
 
 ------------------------------------------------------------------------ our drawing on a plate
 
+-- every part of the game's plate (all its regions and all its frames but ours) gets this alpha
+local function NativeAlpha(p, a)
+	local regs = p.regs;
+	for i = 1, table.getn(regs) do
+		local r = regs[i];
+		if ( r == p.raid and not p.raidOurs ) then
+			r:SetAlpha(1);                                  -- we cannot draw the icon ourselves: the game's own stays
+		else
+			r:SetAlpha(a);
+		end
+	end
+	local kids = { p.frame:GetChildren() };
+	for i = 1, table.getn(kids) do
+		if ( kids[i] ~= p.v ) then
+			kids[i]:SetAlpha(a);
+		end
+	end
+	p.nkids = p.frame:GetNumChildren();
+end
+
+local function Quiet(p)
+	NativeAlpha(p, 0);
+	p.quiet = true;
+end
+
 function G.PlateBuild(p)
 	local plate = p.frame;
 	local v = CreateFrame("Frame", nil, plate);
@@ -121,19 +152,19 @@ function G.PlateBuild(p)
 	p.mark:SetPoint("RIGHT", p.bar, "LEFT", -2, 0);
 	p.mark:Hide();
 
-	-- the game's own drawing becomes invisible, once: the plates keep their regions for good
-	p.border:SetAlpha(0);
-	p.glow:SetAlpha(0);
-	p.name:SetAlpha(0);
-	if ( p.level ) then
-		p.level:SetAlpha(0);
-	end
-	p.icon:SetAlpha(0);
-	p.hb:SetAlpha(0);
-	if ( p.cast ) then
-		p.cast:SetAlpha(0);
-	end
-	p.quiet = true;
+	-- the raid icon (the game's mark on a unit): the game's own icon sits where its old bar was, so it is drawn again
+	-- above our bar from the same picture. If the game's icon cannot be read, its own stays as it is.
+	p.raidTex = tf:CreateTexture(nil, "OVERLAY");
+	p.raidTex:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcons");
+	p.raidTex:SetWidth(16);
+	p.raidTex:SetHeight(16);
+	p.raidTex:SetPoint("BOTTOM", p.bar, "TOP", 0, 3);
+	p.raidTex:Hide();
+	p.raidOurs = ( p.raid ~= nil and p.raid.GetTexCoord ~= nil and p.raid.IsShown ~= nil );
+	p.cRaid = 0;
+
+	-- the game's own drawing becomes invisible (see Quiet: it is done again whenever the game undoes it)
+	Quiet(p);
 
 	-- a plate is given to another unit by showing it again: start from nothing until it has been looked at
 	local old = plate:GetScript("OnShow");
@@ -144,6 +175,9 @@ function G.PlateBuild(p)
 		local q = this.azsPlate;
 		if ( q and q.v ) then
 			q.v:Hide();
+			if ( P.active ) then
+				Quiet(q);                                 -- the game sets a plate up again when it gives it to a new unit
+			end
 			if ( not q.queued ) then
 				q.queued = true;
 				table.insert(P.fresh, q);
@@ -157,18 +191,10 @@ local function Release(p)
 	if ( not p.quiet ) then
 		return;
 	end
+	NativeAlpha(p, 1);
 	p.quiet = false;
-	p.border:SetAlpha(1);
-	p.glow:SetAlpha(1);
-	p.name:SetAlpha(1);
-	if ( p.level ) then
-		p.level:SetAlpha(1);
-	end
-	p.icon:SetAlpha(1);
-	p.hb:SetAlpha(1);
-	if ( p.cast ) then
-		p.cast:SetAlpha(1);
-	end
+	p.cRaid = 0;
+	p.raidTex:Hide();
 	p.v:Hide();
 end
 
@@ -176,18 +202,17 @@ local function Requiet(p)
 	if ( p.quiet ) then
 		return;
 	end
-	p.quiet = true;
-	p.border:SetAlpha(0);
-	p.glow:SetAlpha(0);
-	p.name:SetAlpha(0);
-	if ( p.level ) then
-		p.level:SetAlpha(0);
-	end
-	p.icon:SetAlpha(0);
-	p.hb:SetAlpha(0);
-	if ( p.cast ) then
-		p.cast:SetAlpha(0);
-	end
+	Quiet(p);
+end
+
+-- did the game bring its health bar back? (every look: one call)
+local function Disturbed(p)
+	return p.hb:GetAlpha() > 0;
+end
+
+-- did it add a part (its cast bar is made when it is first needed) or bring the cast bar back? (every few looks)
+local function Stirred(p)
+	return p.frame:GetNumChildren() ~= p.nkids or ( p.cast ~= nil and p.cast:GetAlpha() > 0 );
 end
 
 ------------------------------------------------------------------------ what a plate shows
@@ -219,6 +244,47 @@ local function SpecialHealth(name)
 		return G.Num(found.hp), G.Num(found.hpm);
 	end
 	return nil;
+end
+
+-- the names of pets, summons and totems (yours and your party's): their friendly plates can be left out
+local petNames = {};
+local petRead = -100;
+
+local function ReadPets()
+	local now = GetTime();
+	if ( now - petRead < 0.5 ) then
+		return;
+	end
+	petRead = now;
+	petNames = {};
+	local lists = { AZS_PETS, AZS_TOTEMS };
+	for k = 1, 2 do
+		local list = lists[k];
+		if ( type(list) == "table" ) then
+			for i = 1, table.getn(list) do
+				local e = list[i];
+				if ( type(e) == "table" and type(e.name) == "string" ) then
+					petNames[e.name] = true;
+				end
+			end
+		end
+	end
+	local units = { "pet", "partypet1", "partypet2", "partypet3", "partypet4" };
+	for i = 1, 5 do
+		if ( UnitExists and UnitExists(units[i]) ) then
+			local n = UnitName(units[i]);
+			if ( n ) then
+				petNames[n] = true;
+			end
+		end
+	end
+end
+
+local function IsPetName(name)
+	if ( petNames[name] ) then
+		return true;
+	end
+	return string.find(name, " Totem$") ~= nil;                  -- every totem is called that, whoever dropped it
 end
 
 local function PlateText(name, frac, v, hi, isTarget, elite)
@@ -275,7 +341,7 @@ local function Identify(p)
 		p.cName, p.cKind, p.cBoss = name, kind, boss;
 		p.nameText:SetText(G.Esc(name));
 		if ( kind == "elite" ) then
-			p.nameText:SetTextColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+			p.nameText:SetTextColor(NAME_ELITE[1], NAME_ELITE[2], NAME_ELITE[3]);
 			p.bar:SetColor(COLOR_ELITE[1], COLOR_ELITE[2], COLOR_ELITE[3]);
 		elseif ( kind == "friend" ) then
 			local nr, ng, nb = p.name:GetTextColor();
@@ -294,12 +360,30 @@ local function Identify(p)
 			p.mark:SetVertexColor(0.92, 0.85, 0.80, 1);
 			p.mark:Show();
 		elseif ( elite and G.SetCrown(p.mark) ) then
-			p.mark:SetVertexColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 1);
+			p.mark:SetVertexColor(COLOR_ELITE[1], COLOR_ELITE[2] + 0.2, COLOR_ELITE[3] + 0.2, 1);
 			p.mark:Show();
 		else
 			p.mark:Hide();
 		end
 	end
+end
+
+-- which raid icon (1 to 8) the game's icon on the plate shows: the picture is 4 x 4 icons, the icon is a part of it
+local function RaidIndex(raid)
+	local a, b, c, d, e, f, g, h = raid:GetTexCoord();
+	local left, top = a, b;
+	if ( h == nil ) then
+		left, top = a, c;                                   -- the four number form: left, right, top, bottom
+	end
+	if ( type(left) ~= "number" or type(top) ~= "number" ) then
+		return nil;
+	end
+	local col = math.floor(left * 4 + 0.5);
+	local row = math.floor(top * 4 + 0.5);
+	if ( col < 0 or col > 3 or row < 0 or row > 3 ) then
+		return nil;
+	end
+	return row * 4 + col + 1;
 end
 
 -- what the plate shows now: its health, whether it is your target, whether it is shown at all.
@@ -336,7 +420,7 @@ local function Refresh(p, tname, tkind)
 	elseif ( p.enemy ) then
 		show = G.Opt("nameplates") and ( elite or not G.Opt("platesElite") );
 	else
-		show = G.Opt("platesFriend");
+		show = G.Opt("platesFriend") and not ( G.Opt("platesPets") and IsPetName(p.rawName) );
 	end
 	if ( not show ) then
 		if ( p.shownV ) then
@@ -362,6 +446,29 @@ local function Refresh(p, tname, tkind)
 			p.hl:Hide();
 		end
 	end
+	-- a mark on the unit (skull, cross, ...): drawn above the bar
+	if ( p.raidOurs ) then
+		local idx = 0;
+		if ( p.raid:IsShown() ) then
+			idx = RaidIndex(p.raid);
+			if ( not idx ) then
+				p.raidOurs = false;                           -- not readable here: the game's own icon stays
+				p.raid:SetAlpha(1);
+				idx = 0;
+			end
+		end
+		if ( p.cRaid ~= idx ) then
+			p.cRaid = idx;
+			if ( idx > 0 ) then
+				local col = math.mod(idx - 1, 4);
+				local row = math.floor(( idx - 1 ) / 4);
+				p.raidTex:SetTexCoord(col * 0.25, ( col + 1 ) * 0.25, row * 0.25, ( row + 1 ) * 0.25);
+				p.raidTex:Show();
+			else
+				p.raidTex:Hide();
+			end
+		end
+	end
 	if ( not p.shownV ) then
 		p.shownV = true;
 		p.v:Show();
@@ -369,11 +476,17 @@ local function Refresh(p, tname, tkind)
 end
 
 local function Look(p, tname, tkind)
+	if ( p.quiet and Disturbed(p) ) then
+		p.quiet = false;                                      -- the game made something visible again
+	end
 	if ( not p.quiet ) then
 		Requiet(p);
 	end
 	p.age = ( p.age or 0 ) + 1;
 	if ( p.age >= IDENTIFY or not p.rawName ) then
+		if ( p.quiet and Stirred(p) ) then
+			Quiet(p);
+		end
 		Identify(p);
 	end
 	Refresh(p, tname, tkind);
@@ -408,6 +521,9 @@ function G.UpdatePlates(dt)
 		return;
 	end
 	P.active = true;
+	if ( G.Opt("platesFriend") and G.Opt("platesPets") ) then
+		ReadPets();
+	end
 	Scan();
 	local list = P.list;
 	local n = table.getn(list);
@@ -431,7 +547,9 @@ function G.UpdatePlates(dt)
 		p.cName = nil;
 		p.rawName = nil;
 		p.forceElite, p.forceBoss = nil, nil;
+		p.cRaid = 0;
 		if ( p.frame:IsShown() ) then
+			p.quiet = false;                                  -- a plate given to a unit is set up again
 			Look(p, tname, tkind);
 		end
 	end
@@ -457,6 +575,53 @@ function G.UpdatePlates(dt)
 	P.cursor = i;
 end
 
+------------------------------------------------------------------------ marking bosses and guardians
+
+-- The game's raid icons: a skull on a boss, a cross on a guardian. Only a unit you can name to the game can be marked: your
+-- target, or the unit under the mouse. A guardian is only known for your target (the game reads it as an elite everywhere
+-- else); a boss is known on both. A mark that is already there is never changed, and a mark you remove is not put back
+-- until you target that unit again.
+local MARK_OF = { boss = 8, final = 8, guardian = 7 };
+local markDue = { target = 0, mouseover = 0 };            -- until when the unit is waited for (GetTime), 0: nothing to do
+
+function G.NoteMarkEvent(unit)
+	markDue[unit] = GetTime() + 3;
+end
+
+local function MarkUnit(unit, setIcon)
+	local due = markDue[unit];
+	if ( due == 0 ) then
+		return;
+	end
+	if ( GetTime() > due or not UnitExists(unit) ) then
+		markDue[unit] = 0;
+		return;
+	end
+	local kind = AZS_UnitKind(unit);
+	if ( not kind ) then
+		return;                                           -- not known yet: asked again at the next look
+	end
+	markDue[unit] = 0;
+	local icon = MARK_OF[kind];
+	if ( icon and not ( UnitIsDead and UnitIsDead(unit) ) and ( GetRaidTargetIndex(unit) or 0 ) == 0 ) then
+		pcall(setIcon, unit, icon);
+		G.marksSet = ( G.marksSet or 0 ) + 1;
+	end
+end
+
+function G.UpdateMarks(dt)
+	if ( not G.Opt("marks") ) then
+		markDue.target, markDue.mouseover = 0, 0;
+		return;
+	end
+	local setIcon = SetRaidTargetIcon or SetRaidTarget;
+	if ( not setIcon or not GetRaidTargetIndex or not AZS_UnitKind or not UnitExists ) then
+		return;
+	end
+	MarkUnit("target", setIcon);
+	MarkUnit("mouseover", setIcon);
+end
+
 -- what the plates see, for a report from the game: /gw2 plates debug
 function G.PlatesReport()
 	G.Print("nameplates: " .. ( G.Opt("nameplates") and "on" or "off" ) .. ", only elites and guardians: "
@@ -470,6 +635,28 @@ function G.PlatesReport()
 		end
 	end
 	G.Print("plates found: " .. table.getn(P.list) .. " (" .. shown .. " up), WorldFrame children: " .. WorldFrame:GetNumChildren());
+	local dumped = 0;
+	for i = 1, table.getn(P.list) do
+		local p = P.list[i];
+		if ( dumped < 2 and p.frame:IsShown() ) then
+			dumped = dumped + 1;
+			local kids = { p.frame:GetChildren() };
+			G.Print("  plate " .. dumped .. " " .. G.Plain(tostring(p.rawName)) .. ": hidden by us " .. tostring(p.quiet)
+				.. ", " .. table.getn(kids) .. " frames, " .. table.getn(p.regs) .. " regions");
+			for k = 1, table.getn(kids) do
+				local c = kids[k];
+				G.Print("    frame " .. k .. (c == p.v and " (ours)" or "") .. ": " .. tostring(c:GetObjectType()) .. ", shown " .. tostring(c:IsShown())
+					.. ", alpha " .. string.format("%.2f", c:GetAlpha()));
+			end
+			for k = 1, table.getn(p.regs) do
+				local r = p.regs[k];
+				G.Print("    region " .. k .. ": " .. tostring(r:GetObjectType()) .. ", shown " .. tostring(r:IsShown())
+					.. ", alpha " .. string.format("%.2f", r:GetAlpha()));
+			end
+		end
+	end
+	G.Print("marks " .. ( G.Opt("marks") and "on" or "off" ) .. ", set " .. ( G.marksSet or 0 ) .. " so far, SetRaidTargetIcon "
+		.. tostring( ( SetRaidTargetIcon or SetRaidTarget ) ~= nil ) .. ", GetRaidTargetIndex " .. tostring(GetRaidTargetIndex ~= nil));
 	if ( table.getn(P.list) == 0 ) then
 		-- the plates were not recognised: say what the first few unnamed frames under WorldFrame look like
 		local kids = { WorldFrame:GetChildren() };

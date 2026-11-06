@@ -150,7 +150,7 @@ local function NewSlot(size, hasCooldown, ranked)
 	b.keyText:SetPoint("CENTER", chip, "CENTER", 0, 0);
 	b.keyText:SetTextColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
 
-	-- how many enemies the skill hit with its last cast: the same chip as the rank, at the top centre, in red
+	-- the most enemies the skill can hit (see "how many targets a skill can hit"): the same chip as the rank, at the top centre, in red
 	if ( hasCooldown ) then
 		local hc = CreateFrame("Frame", nil, tf);
 		hc:SetWidth(18);
@@ -247,6 +247,7 @@ local function SetEmpty(b)
 	SetCdText(b, "");
 	SetRank(b, 0);
 	SetHits(b, 0);
+	b.tgtKey = nil;
 end
 
 local function SetSpell(b, entry)
@@ -674,129 +675,165 @@ function G.UpdateSkills(dt)
 	end
 end
 
------------------------------------------------------------------------- enemies hit by a skill
+------------------------------------------------------------------------ how many targets a skill can hit
 
--- The game does not say how many enemies a skill hits (the +targets of a hero add to it), but it lists every hit
--- with its target. So this counts the different enemies one cast hit: hits of the same skill that land within
--- a third of a second of each other are one cast. The chip shows the biggest number of the last cast and falls to
--- the real one when the cast is over; it goes away four seconds after the last hit. One enemy shows nothing: the
--- chip is for the skills that hit more than one.
-local BURST = 0.35;
-local HITHOLD = 4;
-local HITPAGES = 4;
-G.hits = {};
-G.hitCursor = nil;
+-- The game's own spell tooltip says it ("Strikes the 5 nearest enemies within 30 yd ..."), and the +targets of upgrades
+-- and cards are already in that number. So a hidden tooltip of ours is given the spell and its text is read: the number
+-- on the chip is the most the skill can hit, whether or not that many enemies are near. A skill for one enemy shows
+-- nothing. One skill is read per look (a changed skill first, the others about every three seconds, as upgrades come
+-- and go), never all of them at once.
+local TGT_AGE = 3;
+local scanTip = nil;
 
-local function CloseBurst(h)
-	h.open = false;
-	h.shown = h.n;
-end
-
-local function NoteHit(e, now)
-	local key = e.meterSourceKey;
-	if ( type(key) ~= "string" or not e.targetId ) then
-		return;
-	end
-	local _, _, ability = string.find(key, "^ability:([^:]+)");
-	if ( not ability ) then
-		return;
-	end
-	local t = e.presentedAt or now;
-	if ( now - t > 2 ) then
-		return;                                         -- an old hit of a delayed batch
-	end
-	local h = G.hits[ability];
-	if ( not h ) then
-		h = { n = 0, shown = 0, last = 0, set = {} };
-		G.hits[ability] = h;
-	end
-	if ( h.open and t - h.last > BURST ) then
-		CloseBurst(h);
-	end
-	if ( not h.open ) then
-		h.open = true;
-		h.n = 0;
-		for k in pairs(h.set) do
-			h.set[k] = nil;
+local function ScanTip()
+	if ( scanTip == nil ) then
+		scanTip = false;
+		local ok, tt = pcall(CreateFrame, "GameTooltip", "AZSGW2ScanTip", UIParent, "GameTooltipTemplate");
+		if ( ok and tt and tt.SetSpell and tt.SetOwner and tt.NumLines ) then
+			scanTip = tt;
 		end
 	end
-	if ( not h.set[e.targetId] ) then
-		h.set[e.targetId] = true;
-		h.n = h.n + 1;
-	end
-	if ( h.n > h.shown ) then
-		h.shown = h.n;
-	end
-	if ( t > h.last ) then
-		h.last = t;
-	end
+	return scanTip or nil;
 end
 
-local function ReadHits(now)
-	for page = 1, HITPAGES do
-		local batch, err = AZS_GetCombatTextEvents(G.hitCursor);
-		if ( not batch ) then
-			G.hitCursor = nil;                          -- a new stream (a new run, a /reload): start again
-			return;
+-- "Strikes the 5 nearest enemies within 30 yd" -> 5. Lines of upgrades and bonuses ("+1 target") are not the description.
+local function TargetsInText(text)
+	local s = string.lower(text);
+	if ( string.find(s, "%+%d+ target") or string.find(s, "^upgrades") or string.find(s, "^your bonuses") ) then
+		return nil;
+	end
+	local _, _, n = string.find(s, "(%d+) nearest enem");
+	if ( not n ) then
+		_, _, n = string.find(s, "up to (%d+) enem");
+	end
+	if ( not n ) then
+		_, _, n = string.find(s, "up to (%d+) target");
+	end
+	if ( not n ) then
+		_, _, n = string.find(s, "(%d+) random enem");
+	end
+	if ( not n ) then
+		_, _, n = string.find(s, "(%d+) nearby enem");
+	end
+	if ( not n ) then
+		_, _, n = string.find(s, "(%d+) enemies");
+	end
+	if ( not n ) then
+		_, _, n = string.find(s, "(%d+) targets");
+	end
+	return tonumber(n);
+end
+
+local function KeyOf(e)
+	return tostring(e.key) .. ":" .. tostring(math.floor(G.Num(e.rank)));
+end
+
+local function ReadTargets(b)
+	local e = b.entry;
+	local now = GetTime();
+	b.tgtAt = now;
+	if ( not e ) then
+		b.tgtKey = nil;
+		SetHits(b, 0);
+		return;
+	end
+	local key = KeyOf(e);
+	if ( b.tgtKey ~= key ) then
+		b.tgtKey = key;
+		b.bookIdx, b.bookAt = nil, nil;
+	end
+	-- where the skill stands in the spellbook: looked up once per skill and rank. Until the loadout has told the skill's
+	-- name, and for a skill that is not in the book, it is tried again every few seconds, not every look.
+	if ( not b.bookIdx ) then
+		local info = G.abilityInfo[e.key];
+		if ( info and info.name and now - ( b.bookAt or -100 ) >= 5 ) then
+			b.bookAt = now;
+			b.bookIdx = BookIndex(info.name, math.floor(G.Num(e.rank)));
 		end
-		G.hitCursor = batch.cursor;
-		local events = batch.events or {};
-		for i = 1, table.getn(events) do
-			local e = events[i];
-			if ( e.kind == "damage" and e.sourceKind == "player" ) then
-				NoteHit(e, now);
+	end
+	local n = 0;
+	local tt = b.bookIdx and ScanTip();
+	if ( tt ) then
+		tt:SetOwner(UIParent, "ANCHOR_NONE");
+		local ok = pcall(tt.SetSpell, tt, b.bookIdx, "spell");
+		if ( ok ) then
+			for i = 2, tt:NumLines() do
+				local fs = getglobal("AZSGW2ScanTipTextLeft" .. i);
+				local text = fs and fs:GetText();
+				if ( text ) then
+					local c = TargetsInText(text);
+					if ( c ) then
+						n = c;
+						break;
+					end
+				end
 			end
 		end
-		if ( not batch.hasMore ) then
-			return;
-		end
+		tt:Hide();
+	end
+	if ( n >= 2 ) then
+		SetHits(b, math.min(n, 99));
+	else
+		SetHits(b, 0);
 	end
 end
 
-function G.ClearHits()
-	for key, h in pairs(G.hits) do
-		G.hits[key] = nil;
-	end
-	G.hitCursor = nil;
-	for i = 1, 6 do
-		if ( G.slots[i] ) then
-			SetHits(G.slots[i], 0);
-		end
-	end
-	SetHits(G.racial, 0);
-end
+G.tgtCursor = 0;
+G.tgtOff = false;
 
-function G.UpdateHits(dt)
+function G.UpdateTargets(dt)
 	if ( not G.slots[1] ) then
 		return;
 	end
-	if ( not G.shown or not G.Opt("hits") or not AZS_GetCombatTextEvents ) then
-		if ( G.hitCursor or next(G.hits) ) then
-			G.ClearHits();
+	if ( not G.shown or not G.Opt("hits") ) then
+		if ( not G.tgtOff ) then
+			G.tgtOff = true;
+			for i = 1, 7 do
+				local b = G.slots[i];
+				if ( i == 7 ) then
+					b = G.racial;
+				end
+				if ( b ) then
+					SetHits(b, 0);
+					b.tgtKey, b.tgtAt = nil, nil;
+				end
+			end
 		end
 		return;
 	end
+	G.tgtOff = false;
 	local now = GetTime();
-	ReadHits(now);
+	-- a skill that changed (or is new) is read first
+	local pick = nil;
 	for i = 1, 7 do
 		local b = G.slots[i];
 		if ( i == 7 ) then
 			b = G.racial;
 		end
-		local n = 0;
-		local key = b and b.entry and b.entry.key;
-		local h = key and G.hits[key];
-		if ( h ) then
-			if ( h.open and now - h.last > BURST ) then
-				CloseBurst(h);
+		if ( b and b.entry and b.tgtKey ~= KeyOf(b.entry) ) then
+			pick = b;
+			break;
+		end
+	end
+	-- else the next one that was read a while ago
+	if ( not pick ) then
+		for step = 1, 7 do
+			G.tgtCursor = G.tgtCursor + 1;
+			if ( G.tgtCursor > 7 ) then
+				G.tgtCursor = 1;
 			end
-			if ( now - h.last <= HITHOLD and h.shown >= 2 ) then
-				n = h.shown;
+			local b = G.slots[G.tgtCursor];
+			if ( G.tgtCursor == 7 ) then
+				b = G.racial;
+			end
+			if ( b and b.entry and now - ( b.tgtAt or -100 ) >= TGT_AGE ) then
+				pick = b;
+				break;
 			end
 		end
-		if ( b ) then
-			SetHits(b, n);
-		end
+	end
+	if ( pick ) then
+		ReadTargets(pick);
 	end
 end
 

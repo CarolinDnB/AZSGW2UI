@@ -23,7 +23,7 @@ Restart the game once (new texture files are only read at start), then enter a w
 | Health orb: only your HP number, centered; the barrier (absorb shield) is a gold layer | `AZS_RUN` hp / sh |
 | Experience: two curved yellow arcs that follow the top of the orb (left arc fills first, then the right one: clockwise), level badge between them | `AZS_RUN` xp / xpn |
 | Resource bar under the orb (rage, combo points, soul shards, Lightwell) | `AZS_RUN` |
-| Skill bar: 3 big slots on each side of the orb on a soft dark smoke, the round chip at the bottom of a slot is the skill's rank (no flashing), the one at the top says how many enemies the last cast hit (only shown from 2 on). The racial sits left of the left three, Talents and Character are two small buttons right of the right three | `AZS_SPELLS`, key bindings |
+| Skill bar: 3 big slots on each side of the orb on a soft dark smoke, the round chip at the bottom of a slot is the skill's rank (no flashing), the red-ringed one at the top says how many enemies the skill can hit at most, upgrades and cards included (only shown from 2 on; read from the skill's own tooltip, so it is there without any enemy near). The racial sits left of the left three, Talents and Character are two small buttons right of the right three | `AZS_SPELLS`, key bindings |
 | Jewelry plate, buffs / debuffs above the right slots, summons / totems above the left ones | meter API loadout, `GetPlayerBuff*`, `AZS_Get*` |
 | Square GW2 minimap: zone plate with local time, zoom buttons and mouse wheel, a golden arrow for you (it turns with the hero), pins for caches, guardian lairs (asleep / awake / empty) and downed friends; far pins stick to the edge | the game's Minimap frame, `AZS_CHESTS`, `AZS_GetLairs`, `AZS_GetPlayerPosition` |
 | Guardian list under the minimap: a skull per guardian, a direction arrow for each and a big one in the header for the nearest | `AZS_GetLairs`, `AZS_GetPlayerPosition` |
@@ -31,8 +31,8 @@ Restart the game once (new texture files are only read at start), then enter a w
 | Run bar with the difficulty: `NORMAL`, or `HEROIC I` to `HEROIC V` in orange, the affixes (Bolstering, Sanguine, Explosive) at the right end of the line under the bar | `AZS_ZONE` heroic / affixes |
 | Kills / gold / cache strip with the kills per minute as `[18/m]` (tooltip: run average and last minute) | `AZS_RUN`, run clock |
 | GW2 damage numbers: small white numbers with a thin dark outline, bigger ones with a red blot behind them for crits, smaller for damage-over-time ticks and pets, grey words for misses; they follow the enemy and shrink with distance. All numbers, only crits or none; ticks on or off | world-anchored combat text API |
-| Target bar for what you target, built like Guild Wars 2's: a wide flat bar with a glossy fill and a dark frame, the name inside on the left, the health and the percent inside on the right, a round badge at the right end (a crown for elites, a small skull otherwise). Red for enemies, gold for elites, **green** for friends (class-coloured name, "Downed" when down); shows at once on the click, exact numbers follow | client target, `AZS_TARGET`, `AZS_UNITS` |
-| Nameplates in the same style (off by default): a small glossy bar with the name below it, the health inside for your target, a white outline on the target's plate, a crown or skull mark for elites and bosses. Options: all enemies or only elites and guardians, friendly plates on or off | the game's own nameplates (skinned), `AZS_TARGET`, `AZS_UNITS`, `AZS_UnitKind` |
+| Target bar for what you target, built like Guild Wars 2's: a wide flat bar with a glossy fill and a dark frame, the name inside on the left, the health and the percent inside on the right, a round badge at the right end (a crown for elites, a small skull otherwise). Red for enemies, **orange** for elites and guardians, **green** for friends (class-coloured name, "Downed" when down); shows at once on the click, exact numbers follow | client target, `AZS_TARGET`, `AZS_UNITS` |
+| Nameplates in the same style (off by default): a small glossy bar with the name below it, the health inside for your target, a white outline on the target's plate, orange bars for elites and guardians, a crown or skull mark for elites and bosses, the game's raid icons (skull, cross, ...) above the bar. Options: all enemies or only elites and guardians, friendly plates on or off (and not for pets and totems) | the game's own nameplates (skinned), `AZS_TARGET`, `AZS_UNITS`, `AZS_UnitKind` |
 | Damage meter with the spell icon left of each name, Healing / Boss / Party tabs. On the Party tab the icon is each player's best spell. `10s DPS` is the damage of the last 10 seconds, pets, summons and totems included; the **Reset** button starts all four tabs from zero again | meter API (totals, spell icons) |
 | Co-op party frames with portrait, HP, percent, buffs and the **barrier** (see below). Click a frame to target that friend (a white outline marks your target), right click for a small menu of ours: Inspect, Trade, Follow, Whisper (and Make leader / Remove for the party leader) | party units, `AZS_GetDownedPartyMembers` |
 | Ally down alert in co-op: "NAME is down!  Revive them!" in a red banner, an arrow that points to the body, the distance, a marker over the body in the world and a short sound; it goes when they get up | `AZS_GetDownedPartyMembers`, world anchors |
@@ -80,6 +80,8 @@ Unlocked, every frame gets a gold box with its name and size: drag it to move it
     /gw2 plates on | off              the GW2 style nameplates (off by default)
     /gw2 plates elite on | off        only elites and guardians
     /gw2 plates friends on | off      friendly nameplates
+    /gw2 plates pets on | off         on: no friendly plates for pets, summons and totems (default)
+    /gw2 marks on | off               mark bosses (skull) and guardians (cross) you target with the game's icons (default on)
     /gw2 plates debug                 what the nameplate frames look like, if no plate is recognised
     /gw2 messages on | off            the game's own centre-screen messages (off by default)
     /gw2 art custom | stock           generated textures / plain colours (reloads)
@@ -139,8 +141,16 @@ Unlocked, every frame gets a gold box with its name and size: drag it to move it
   guardians look like elites.
 - Nameplates and the V key: the game's key now works as usual; our options decide what the plates look like. `/gw2 plates off`
   gives the game's own plates back.
-- The number on top of a skill (enemies hit) is counted from the hits you see in the damage numbers, per cast. It is not the
-  ability's maximum number of targets. Switch it off with "Enemies hit, on the skills" in the settings.
+- The number on top of a skill is the most enemies it can hit, read from the skill's own tooltip ("Strikes the 5 nearest
+  enemies ..."): it follows upgrades and cards within a few seconds. A skill whose tooltip has no number shows nothing. Switch it
+  off with "Max targets, on the skills" in the settings.
+- Marks: the game's skull goes on a boss and a cross on a guardian when you target them (a boss also when you point at it).
+  Only a unit you target or point at can be marked, and a guardian is only known as one once targeted. An existing mark is never
+  changed; one you remove stays removed until you target that enemy again. `/gw2 marks off` stops it. Whether a mark can be set
+  depends on the game (in a party, perhaps only the leader); `/gw2 plates debug` says whether the functions exist.
+- Two health bars on a nameplate: the game's own bar became visible again next to ours (most likely when it gives a plate to a
+  new enemy). The addon now looks at every plate again and hides it whenever it comes back; if it still happens,
+  `/gw2 plates debug` lists the parts of two plates with their alpha, please send that.
 - A freeze or a black screen: try `/gw2 hunt off` and `/gw2 off` to see whether the addon is involved at all, and report what
   it happened next to together with `/gw2 debug`.
 
@@ -162,7 +172,8 @@ code here are original.
 - Every part can be resized on its own in the unlocked layout (corner, mouse wheel, right click to reset); a lock bar sits at the top.
 - Nameplates in the Guild Wars 2 style, with options for all enemies / only elites and guardians / friendly plates. The game's V key no longer gets undone half a second later.
 - A new target bar in the style of Guild Wars 2.
-- A small number on top of each skill shows how many enemies the last cast hit.
+- A small number on top of each skill shows how many enemies it can hit at most (from its tooltip).
+- Nameplates: the game's own bar no longer shows next to ours (it came back when a plate was reused); elites and guardians are orange; bosses and guardians you target get the game's skull / cross (option); friendly plates can leave out pets and totems.
 - The 10 second DPS no longer stops after a few seconds on pet builds.
 
 ## Changes in 1.8.0

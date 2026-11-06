@@ -4,7 +4,7 @@
 
 local G = AZSGW2;
 
-local ROWH = 22;
+local ROWH = 20;
 
 ------------------------------------------------------------------------ options
 
@@ -55,7 +55,11 @@ local ROWS = {
 		set = function(v) G.SetPlateOpt("platesElite", v); end },
 	{ label = "Enable friendly nameplates", get = function() return G.Opt("platesFriend"); end,
 		set = function(v) G.SetPlateOpt("platesFriend", v); end },
-	{ label = "Enemies hit, on the skills", get = function() return G.Opt("hits"); end,
+	{ label = "   not for pets and totems", get = function() return G.Opt("platesPets"); end,
+		set = function(v) G.SetOpt("platesPets", v); end },
+	{ label = "Mark bosses and guardians", get = function() return G.Opt("marks"); end,
+		set = function(v) G.SetOpt("marks", v); end },
+	{ label = "Max targets, on the skills", get = function() return G.Opt("hits"); end,
 		set = function(v) G.SetOpt("hits", v); end },
 	{ label = "Damage meter", get = function() return G.Opt("meter"); end,
 		set = function(v) G.SetOpt("meter", v); end },

@@ -239,7 +239,7 @@ function G.Start()
 	AddUpdater("orb", G.UpdateOrb, 0);
 	AddUpdater("resource", G.UpdateResource, 0.05);
 	AddUpdater("skills", G.UpdateSkills, 0.03);
-	AddUpdater("hits", G.UpdateHits, 0.1);
+	AddUpdater("targets", G.UpdateTargets, 0.25);
 	AddUpdater("jewelry", G.UpdateJewelry, 1.0);
 	AddUpdater("status", G.UpdateStatus, 0.2);
 	AddUpdater("auras", G.UpdateAuras, 0.2);
@@ -257,6 +257,7 @@ function G.Start()
 	AddUpdater("minimap", G.UpdateMinimap, 0, true);
 	AddUpdater("arrows", G.UpdateGuardianArrows, 0.05);
 	AddUpdater("plates", G.UpdatePlates, 0.1, true);
+	AddUpdater("marks", G.UpdateMarks, 0.2);
 
 	local driver = CreateFrame("Frame", "AZSGW2Driver", UIParent);
 	driver.azs = true;
@@ -274,9 +275,19 @@ local events = CreateFrame("Frame");
 events:RegisterEvent("VARIABLES_LOADED");
 events:RegisterEvent("PLAYER_ENTERING_WORLD");
 events:RegisterEvent("PLAYER_TARGET_CHANGED");
+events:RegisterEvent("UPDATE_MOUSEOVER_UNIT");
 events:RegisterEvent("UNIT_HEALTH");
 events:RegisterEvent("CHAT_MSG_ADDON");
 events:SetScript("OnEvent", function()
+	if ( event == "UPDATE_MOUSEOVER_UNIT" ) then
+		if ( G.NoteMarkEvent ) then
+			G.NoteMarkEvent("mouseover");
+		end
+		return;
+	end
+	if ( event == "PLAYER_TARGET_CHANGED" and G.NoteMarkEvent ) then
+		G.NoteMarkEvent("target");
+	end
 	if ( event == "PLAYER_TARGET_CHANGED" or ( event == "UNIT_HEALTH" and arg1 == "target" )
 		or ( event == "CHAT_MSG_ADDON" and arg1 == "AZSTGT" ) ) then
 		-- the bar changes in the same frame as the click / the table update, not at the next poll
@@ -311,7 +322,8 @@ local function Help()
 	G.Print("/gw2 find <text> : list frames that show that text (to find a frame name)");
 	G.Print("/gw2 bind <character|talents> <BINDING> : key binding the two buttons run");
 	G.Print("/gw2 bindings [text] : list key binding names");
-	G.Print("/gw2 plates on|off | elite on|off | friends on|off | debug : GW2 nameplates (off by default)");
+	G.Print("/gw2 plates on|off | elite on|off | friends on|off | pets on|off | debug : GW2 nameplates (off by default)");
+	G.Print("/gw2 marks on|off : mark the bosses and guardians you target with the game's skull and cross");
 	G.Print("/gw2 messages on|off : the game's own centre-screen messages (off by default)");
 	G.Print("/gw2 dmg all | crits | off | ticks on | ticks off : damage numbers");
 	G.Print("/gw2 char [on|off] : open the character panel / use it instead of the game's window");
@@ -560,6 +572,8 @@ function G.Slash(msg)
 			key = "platesElite";
 		elseif ( which == "friends" or which == "friend" or which == "friendly" ) then
 			key = "platesFriend";
+		elseif ( which == "pets" or which == "nopets" ) then
+			key = "platesPets";
 		elseif ( which == "debug" ) then
 			G.PlatesReport();
 			return;
@@ -567,11 +581,19 @@ function G.Slash(msg)
 		if ( not key or ( state ~= "on" and state ~= "off" ) ) then
 			G.Print("nameplates are " .. ( G.Opt("nameplates") and "on" or "off" ) .. ", only elites and guardians "
 				.. ( G.Opt("platesElite") and "on" or "off" ) .. ", friendly " .. ( G.Opt("platesFriend") and "on" or "off" ) .. ".");
-			G.Print("Use /gw2 plates on | off,  /gw2 plates elite on | off,  /gw2 plates friends on | off,  /gw2 plates debug.");
+			G.Print("Use /gw2 plates on | off,  /gw2 plates elite on | off,  /gw2 plates friends on | off,  /gw2 plates pets on | off (on: no plates for pets and totems),  /gw2 plates debug.");
 			return;
 		end
 		G.SetPlateOpt(key, state == "on");
 		G.Print("plates " .. which .. " " .. state);
+	elseif ( cmd == "marks" ) then
+		if ( rest ~= "on" and rest ~= "off" ) then
+			G.Print("marking bosses and guardians is " .. ( G.Opt("marks") and "on" or "off" ) .. ". Use /gw2 marks on or /gw2 marks off.");
+			return;
+		end
+		G.SetOpt("marks", rest == "on");
+		G.RefreshSettings();
+		G.Print("marks " .. rest);
 	elseif ( cmd == "messages" ) then
 		if ( rest ~= "on" and rest ~= "off" ) then
 			G.Print("messages are " .. ( AZSGW2DB.messages and "on" or "off" ) .. ". Use /gw2 messages on or /gw2 messages off.");
