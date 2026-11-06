@@ -144,8 +144,11 @@ Unlocked, every frame gets a gold box with its name and size: drag it to move it
 - Nameplates and the V key: the game's key now works as usual; our options decide what the plates look like. `/gw2 plates off`
   gives the game's own plates back.
 - The number on top of a skill is the most enemies it can hit, read from the game's tooltip of the skill ("Strikes the 5 nearest
-  enemies ..."): the addon shows that tooltip for a moment without drawing it, only while no other tooltip is up, and
-  reads its text. It follows upgrades and cards within a few seconds. `/gw2 targets` prints the lines it read for each skill. A skill whose tooltip has no number shows nothing. Switch it
+  enemies ...", "Targets: 5", "hits your target and 2 other enemies" and the like; what upgrades and cards add is already in that
+  number, the "+1 target" lines are not counted twice). Two reads: the addon shows that tooltip for a moment without drawing it
+  (only while no other tooltip is up), and whenever you point at a skill the tooltip you see is read too, which is exact and is kept
+  until you point at it again. It follows upgrades and cards within a few seconds. `/gw2 targets` prints the lines each skill's
+  tooltip has and which one the number came from, so a missing number can be explained. A skill whose tooltip has no number shows nothing. Switch it
   off with "Max targets, on the skills" in the settings.
 - Marks: the game's skull goes on a boss and a cross on a guardian when you target them (a boss also when you point at it).
   Only a unit you target or point at can be marked, and a guardian is only known as one once targeted. An existing mark is never

@@ -346,6 +346,7 @@ local function SpellTooltip(tt, b)
 	end
 	local info = G.abilityInfo[e.key];
 	local rem = G.SpellRemaining(e);
+	G.hoverSlot = b;                 -- the number of targets in this tooltip is read for the chip (see UpdateTargets)
 	-- the game's own spell tooltip when the spell is in the spellbook
 	local idx = BookIndex(info and info.name, math.floor(G.Num(e.rank)));
 	if ( idx and tt.SetSpell ) then
@@ -678,10 +679,14 @@ end
 ------------------------------------------------------------------------ how many targets a skill can hit
 
 -- The game's own spell tooltip says it ("Strikes the 5 nearest enemies within 30 yd ..."): the game writes the numbers of
--- your hero (upgrades, cards) into the tooltip it shows, so that is where the number is read. The tooltip is given the
--- spell and its text read in the same moment, then hidden again: nothing is ever drawn. It is only done while no tooltip
--- is up (while you hover something, the tooltip is yours), one skill per look, a changed skill first. The number on the
--- chip is the most the skill can hit, whether or not that many enemies are near; a skill for one enemy shows nothing.
+-- your hero (upgrades, cards) into the tooltip it shows, so that is where the number is read. Two ways, so the chip is
+-- there whatever the game does with a tooltip nobody hovers:
+--   * a look: the tooltip is given the spell and shown, its text read in the same moment, then hidden again (nothing is
+--     ever drawn). Only while no tooltip is up, one skill per look, a changed skill first.
+--   * a hover: when you point at a skill, the tooltip you see is read too; that number is exact, and it is kept (and moved
+--     along with the looks) until you point at the skill again.
+-- The number on the chip is the most the skill can hit, whether or not that many enemies are near; a skill for one enemy
+-- shows nothing.
 local TGT_AGE = 2;              -- a skill is read again after this many seconds (an upgrade changes the text)
 local TGT_BUSY = 10;            -- seconds with a tooltip up before the spare tooltip is used instead
 local scanTip = nil;
@@ -720,44 +725,168 @@ local function FreeTip()
 	return nil;
 end
 
--- "Strikes the 5 nearest enemies within 30 yd" -> 5. Lines of upgrades and bonuses ("+1 target") are not the description.
+-- the lines of a tooltip, in order (the text on the right of a line, if there is one, is added after a colon)
+local function CollectLines(tt, prefix)
+	local out = {};
+	local n = tt:NumLines() or 0;
+	for i = 1, n do
+		local l = getglobal(prefix .. "TextLeft" .. i);
+		local r = getglobal(prefix .. "TextRight" .. i);
+		local lt = l and l:GetText();
+		local rt = r and r:GetText();
+		if ( lt and lt ~= "" ) then
+			if ( rt and rt ~= "" ) then
+				lt = lt .. ": " .. rt;
+			end
+			table.insert(out, lt);
+		elseif ( rt and rt ~= "" ) then
+			table.insert(out, rt);
+		else
+			table.insert(out, "");
+		end
+	end
+	return out;
+end
+
+local NUMWORD = { one = 1, two = 2, three = 3, four = 4, five = 5, six = 6, seven = 7, eight = 8, nine = 9, ten = 10,
+	eleven = 11, twelve = 12 };
+-- words that may stand between the number and what it counts ("5 nearest enemies", "2 other nearby targets"); the ones
+-- marked "plus" say the number is on top of the main target
+local FILLER = { nearest = true, closest = true, random = true, nearby = true, adjacent = true, surrounding = true,
+	different = true, separate = true, hostile = true, additional = "plus", other = "plus", extra = "plus", more = "plus" };
+local NOUNS = { "enem", "target", "foe", "monster", "creature", "mob", "opponent" };
+
+local function IsNoun(w)
+	for i = 1, table.getn(NOUNS) do
+		if ( string.find(w, "^" .. NOUNS[i]) ) then
+			return true;
+		end
+	end
+	return false;
+end
+
+local function IsNumber(w)
+	return string.find(w, "^%d+$") ~= nil;
+end
+
+-- "Strikes the 5 nearest enemies within 30 yd" -> 5; "Targets: 4" -> 4; "Hits the target and 2 other targets" -> 3.
+-- What the upgrades and cards add ("Upgrades: +1 target", "(+2 targets)") is not the description: it is cut away.
 local function TargetsInText(text)
 	local s = string.lower(text);
 	s = string.gsub(s, "|c%x%x%x%x%x%x%x%x", "");
 	s = string.gsub(s, "|r", "");
-	if ( string.find(s, "%+%d+ target") or string.find(s, "^upgrades") or string.find(s, "^your bonuses") ) then
+	s = string.gsub(s, "%b()", " ");
+	s = string.gsub(s, "%b[]", " ");
+	s = string.gsub(s, "%+%d+%s*%a*%s*%a*%s*target%a*", " ");
+	if ( string.find(s, "^%s*upgrade") or string.find(s, "^%s*your bonus") or string.find(s, "^%s*bonus") ) then
 		return nil;
 	end
-	local _, _, n = string.find(s, "(%d+) nearest enem");
-	if ( not n ) then
-		_, _, n = string.find(s, "(%d+) closest enem");
+	local tok = {};
+	local pos = 1;
+	while ( true ) do
+		local a, b, w, p = string.find(s, "([%a%d]+)([^%a%d]*)", pos);
+		if ( not a ) then
+			break;
+		end
+		table.insert(tok, { w = w, p = p });
+		pos = b + 1;
 	end
-	if ( not n ) then
-		_, _, n = string.find(s, "nearest (%d+) enem");
+	local nt = table.getn(tok);
+	local skipNext = false;
+	for i = 1, nt do
+		local w, p = tok[i].w, tok[i].p;
+		local n = nil;
+		if ( IsNumber(w) ) then
+			n = tonumber(w);
+		else
+			n = NUMWORD[w];
+		end
+		-- "1.5" and "30%" are not counts
+		if ( skipNext ) then
+			skipNext = false;
+			n = nil;
+		elseif ( n and p == "." and tok[i + 1] and IsNumber(tok[i + 1].w) ) then
+			skipNext = true;
+			n = nil;
+		end
+		if ( n and string.find(p, "^%%") ) then
+			n = nil;
+		end
+		if ( n ) then
+			local plus = 0;
+			for j = i + 1, math.min(i + 3, nt) do
+				local f = tok[j].w;
+				if ( IsNoun(f) ) then
+					return n + plus;
+				elseif ( FILLER[f] ) then
+					if ( FILLER[f] == "plus" ) then
+						plus = 1;
+					end
+				else
+					break;
+				end
+			end
+		elseif ( IsNoun(w) and string.find(p, "^%s*:") and tok[i + 1] and IsNumber(tok[i + 1].w) ) then
+			-- "Targets: 4"
+			return tonumber(tok[i + 1].w);
+		end
 	end
-	if ( not n ) then
-		_, _, n = string.find(s, "up to (%d+) enem");
+	return nil;
+end
+
+-- the first description line (the first line is the name) that tells a number; also the line it was
+local function TargetsFromLines(lines)
+	for i = 2, table.getn(lines) do
+		local c = TargetsInText(lines[i]);
+		if ( c ) then
+			return c, i;
+		end
 	end
-	if ( not n ) then
-		_, _, n = string.find(s, "up to (%d+) target");
-	end
-	if ( not n ) then
-		_, _, n = string.find(s, "(%d+) random enem");
-	end
-	if ( not n ) then
-		_, _, n = string.find(s, "(%d+) nearby enem");
-	end
-	if ( not n ) then
-		_, _, n = string.find(s, "(%d+) enemies");
-	end
-	if ( not n ) then
-		_, _, n = string.find(s, "(%d+) targets");
-	end
-	return tonumber(n);
+	return nil, nil;
 end
 
 local function KeyOf(e)
 	return tostring(e.key) .. ":" .. tostring(math.floor(G.Num(e.rank)));
+end
+
+-- what the chip says: what the looks read, moved by what the last hover showed over it (if the looks cannot see what the
+-- hover does, the hover is what counts; if they see the same, the move is nothing)
+local function ApplyCount(b)
+	local n = b.scanN or 0;
+	if ( b.hoverN ) then
+		n = n + ( b.hoverN - ( b.hoverBase or n ) );
+	end
+	if ( n >= 2 ) then
+		SetHits(b, math.min(n, 99));
+	else
+		SetHits(b, 0);
+	end
+end
+
+-- a skill other than before: nothing of the earlier one is kept
+local function ForgetSkill(b, key)
+	b.tgtKey = key;
+	b.bookIdx, b.bookAt = nil, nil;
+	b.scanN, b.scanLine, b.scanSeen = nil, nil, nil;
+	b.hoverN, b.hoverBase, b.hoverBlind = nil, nil, nil;
+end
+
+-- shows the tooltip for the spell at book entry idx, reads its lines, hides it again; nil when no tooltip is free
+local function ScanSpell(b, idx)
+	local tt, prefix = FreeTip();
+	if ( not tt ) then
+		return nil;
+	end
+	pcall(tt.SetOwner, tt, b, "ANCHOR_NONE");
+	local lines = {};
+	if ( pcall(tt.SetSpell, tt, idx, "spell") ) then
+		if ( tt.Show ) then
+			tt:Show();
+		end
+		lines = CollectLines(tt, prefix);
+	end
+	tt:Hide();
+	return lines;
 end
 
 -- reads the tooltip of the skill in slot b; false when no tooltip was free (it is tried again at the next look).
@@ -767,13 +896,13 @@ local function ReadTargets(b, dump)
 	local now = GetTime();
 	if ( not e ) then
 		b.tgtKey, b.tgtAt = nil, now;
+		b.scanN, b.scanSeen, b.hoverN, b.hoverBase, b.hoverBlind = nil, nil, nil, nil, nil;
 		SetHits(b, 0);
 		return true;
 	end
 	local key = KeyOf(e);
 	if ( b.tgtKey ~= key ) then
-		b.tgtKey = key;
-		b.bookIdx, b.bookAt = nil, nil;
+		ForgetSkill(b, key);
 	end
 	-- where the skill stands in the spellbook: looked up once per skill and rank. Until the loadout has told the skill's
 	-- name, and for a skill that is not in the book, it is tried again every few seconds, not every look.
@@ -785,52 +914,77 @@ local function ReadTargets(b, dump)
 		end
 	end
 	local n = 0;
+	b.scanLine = nil;
 	if ( b.bookIdx ) then
-		local tt, prefix = FreeTip();
-		if ( not tt ) then
+		local lines = ScanSpell(b, b.bookIdx);
+		if ( not lines ) then
 			return false;
 		end
-		tt:SetOwner(UIParent, "ANCHOR_NONE");
-		local ok = pcall(tt.SetSpell, tt, b.bookIdx, "spell");
-		if ( ok ) then
-			for i = 1, tt:NumLines() do
-				local fs = getglobal(prefix .. "TextLeft" .. i);
-				local text = fs and fs:GetText();
-				if ( text ) then
-					if ( dump ) then
-						table.insert(dump, text);
-					end
-					if ( i >= 2 ) then
-						local c = TargetsInText(text);
-						if ( c ) then
-							n = c;
-							break;
-						end
-					end
-				end
+		local c, at = TargetsFromLines(lines);
+		n = c or 0;
+		b.scanLine = at;
+		if ( dump ) then
+			for i = 1, table.getn(lines) do
+				table.insert(dump, lines[i]);
 			end
 		end
-		tt:Hide();
 	end
+	local seen = ( n > 0 );
 	b.tgtAt = now;
-	b.tgtN = n;
-	if ( n >= 2 ) then
-		SetHits(b, math.min(n, 99));
-	else
-		SetHits(b, 0);
+	b.scanN = n;
+	if ( b.hoverN and not b.hoverBase ) then
+		b.hoverBase = n;          -- the hover came before the first look: the look is what it is compared with from here
+		b.hoverBlind = not seen;
+	elseif ( b.hoverN and b.hoverBlind and seen ) then
+		b.hoverN, b.hoverBase, b.hoverBlind = nil, nil, nil;   -- the looks see numbers now: they are what counts
 	end
+	b.scanSeen = seen;
+	ApplyCount(b);
 	return true;
 end
 
 G.tgtCursor = 0;
 G.tgtOff = false;
 G.tgtSeen = {};
+G.hoverSlot = nil;
+G.hoverLines = nil;
 
 local function SlotAt(i)
 	if ( i == 7 ) then
 		return G.racial;
 	end
 	return G.slots[i];
+end
+
+-- the player points at a skill and the game's tooltip is up for it: that text is read as it is (the exact numbers)
+local function HoverRead()
+	local b = G.hoverSlot;
+	if ( not b ) then
+		return;
+	end
+	local gt = GameTooltip;
+	if ( not ( b.entry and gt and gt.IsShown and gt:IsShown() and gt.NumLines ) ) then
+		G.hoverSlot = nil;
+		return;
+	end
+	local lines = CollectLines(gt, "GameTooltip");
+	local info = G.abilityInfo[b.entry.key];
+	local want = string.lower(G.Plain(( info and info.name ) or Pretty(b.entry.key)));
+	local first = lines[1] and string.lower(G.Plain(lines[1]));
+	if ( first ~= want ) then
+		return;                   -- another tooltip is up (the first line of a spell's tooltip is its name)
+	end
+	G.hoverLines = lines;
+	local c = TargetsFromLines(lines);
+	if ( c ) then
+		if ( b.tgtKey ~= KeyOf(b.entry) ) then
+			ForgetSkill(b, KeyOf(b.entry));
+		end
+		b.hoverN = c;
+		b.hoverBase = b.scanN;
+		b.hoverBlind = ( b.scanN ~= nil ) and not b.scanSeen;   -- nil: not known until the first look
+		ApplyCount(b);
+	end
 end
 
 -- the game says when your spells or stats changed (a card was picked): every skill is read again soon
@@ -855,17 +1009,20 @@ function G.UpdateTargets(dt)
 	if ( not G.shown or not G.Opt("hits") ) then
 		if ( not G.tgtOff ) then
 			G.tgtOff = true;
+			G.hoverSlot = nil;
 			for i = 1, 7 do
 				local sl = SlotAt(i);
 				if ( sl ) then
 					SetHits(sl, 0);
 					sl.tgtKey, sl.tgtAt = nil, nil;
+					sl.scanN, sl.scanSeen, sl.hoverN, sl.hoverBase, sl.hoverBlind = nil, nil, nil, nil, nil;
 				end
 			end
 		end
 		return;
 	end
 	G.tgtOff = false;
+	HoverRead();
 	ChangedUpgrades();
 	local now = GetTime();
 	-- a skill that changed (or is new) is read first
@@ -896,6 +1053,16 @@ function G.UpdateTargets(dt)
 	end
 end
 
+local function ReportLines(lines, marked)
+	for k = 1, math.min(table.getn(lines), 9) do
+		local mark = "    ";
+		if ( k == marked ) then
+			mark = " -> ";
+		end
+		G.Print(mark .. G.Plain(string.sub(lines[k], 1, 100)));
+	end
+end
+
 -- /gw2 targets: what each skill's tooltip says and what was made of it, to find out why a number is missing
 function G.TargetsReport()
 	G.Print("max targets: option " .. ( G.Opt("hits") and "on" or "off" ) .. ", GameTooltip " .. ( GameTooltip and "found" or "missing" )
@@ -905,14 +1072,29 @@ function G.TargetsReport()
 		if ( sl and sl.entry ) then
 			local dump = {};
 			local info = G.abilityInfo[sl.entry.key];
-			sl.tgtKey = nil;
+			sl.bookAt = nil;
 			local ok = ReadTargets(sl, dump);
-			G.Print(i .. ": " .. G.Plain(tostring(( info and info.name ) or sl.entry.key)) .. ", rank " .. tostring(sl.entry.rank) .. ", book entry "
-				.. tostring(sl.bookIdx) .. ", " .. ( ok and ( "targets read: " .. tostring(sl.tgtN) ) or "no tooltip free" ) .. ", " .. table.getn(dump) .. " lines");
-			for k = 1, math.min(table.getn(dump), 6) do
-				G.Print("    " .. G.Plain(string.sub(dump[k], 1, 90)));
+			local what = "no tooltip free";
+			if ( ok ) then
+				if ( sl.scanLine ) then
+					what = "number read: " .. tostring(sl.scanN);
+				elseif ( sl.bookIdx ) then
+					what = "no number in the text";
+				else
+					what = "not found in the spellbook";
+				end
 			end
+			G.Print(i .. ": " .. G.Plain(tostring(( info and info.name ) or sl.entry.key)) .. ", rank " .. tostring(sl.entry.rank) .. ", book entry "
+				.. tostring(sl.bookIdx) .. ", " .. what .. ( sl.hoverN and ( ", from hover: " .. sl.hoverN ) or "" )
+				.. ", chip " .. ( sl.hitChip and sl.hitChip.shown and sl.hitText:GetText() or "none" ) .. ", " .. table.getn(dump) .. " lines");
+			ReportLines(dump, sl.scanLine);
 		end
+	end
+	if ( G.hoverLines ) then
+		G.Print("last hover tooltip, " .. table.getn(G.hoverLines) .. " lines:");
+		ReportLines(G.hoverLines, nil);
+	else
+		G.Print("no skill hovered since the game started: point at a skill, wait a second, and run this again");
 	end
 end
 

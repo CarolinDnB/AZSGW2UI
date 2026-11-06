@@ -214,9 +214,11 @@ impl.AddLine = function(self, t, r, g, b)
 end
 spellTipText = {}      -- book index -> the lines of the game's spell tooltip (for the scan tooltip)
 scanCalls = 0
+scanBlind = false      -- the game writes the numbers of the hero only into the tooltip a player sees (a hover), not into a look
 impl.SetOwner = function(self, f, a)
 	assert(type(f) == "table" and type(a) == "string")
 	self.tipText = nil
+	self.anchor = a
 	if self._name == "AZSGW2ScanTip" then return end
 	tipLines = {}; lastSetSpell = nil
 end
@@ -227,6 +229,7 @@ impl.SetSpell = function(self, idx, book)
 		scanCalls = scanCalls + 1
 		-- like the game: the tooltip is filled and shown; its lines are GameTooltipTextLeft1, 2, ...
 		local lines = spellTipText[idx] or { (GetSpellName(idx, "spell")) }
+		if scanBlind and self.anchor == "ANCHOR_NONE" then lines = { lines[1] } end
 		self.tipText = lines
 		self.shown = true
 		for i, t in ipairs(lines) do
@@ -1786,6 +1789,44 @@ scenario("skills: the most targets a skill can hit, from its tooltip", function(
 	spellTipText[2] = { "Frostbolt", "Hurls a bolt at the nearest enemy for 300 Frost damage." }
 	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
 	runTicks(30, 0.1)
+	-- other wordings the game may use
+	local function chipFor(lines, want, what)
+		spellTipText[3] = lines
+		blizz.tgtKey = nil
+		runTicks(12, 0.1)
+		local got = blizz.hitChip.shown and blizz.hitText.text or "none"
+		assert(got == want, what .. ": expected " .. want .. ", got " .. got)
+	end
+	chipFor({ "Blizzard", "Targets: 7" }, "7", "'Targets: N'")
+	chipFor({ "Blizzard", "Max targets: 9", "Cooldown: 8 sec" }, "9", "'Max targets: N'")
+	chipFor({ "Blizzard", "Hits 4 additional targets." }, "5", "'N additional targets' is on top of the main target")
+	chipFor({ "Blizzard", "Hits your target and 2 other nearby enemies." }, "3", "'and N other nearby enemies'")
+	chipFor({ "Blizzard", "Chains to up to 5 enemies (+2 targets from cards)." }, "5", "bonus in brackets")
+	chipFor({ "Blizzard", "Fires at three nearest enemies." }, "3", "a number written out")
+	chipFor({ "Blizzard", "Deals 120 damage to enemies within 10 yd for 5 sec." }, "none", "damage is not a count")
+	chipFor({ "Blizzard", "Restores 30% more health to 1.5 enemies." }, "none", "decimals and percents are not counts")
+	chipFor({ "Blizzard", "Hits 6 enemies", "Your bonuses: +3 targets" }, "6", "name line, description, bonus line")
+	-- the game writes the hero's numbers only into the tooltip a player sees: the hover is read, and the chip keeps it
+	scanBlind = true
+	chipFor({ "Blizzard", "Pounds the 6 nearest enemies." }, "none", "a look that sees no numbers")
+	blizz.scripts.OnEnter(); runTicks(6, 0.1)
+	assert(blizz.hitChip.shown and blizz.hitText.text == "6", "hover not read: " .. tostring(blizz.hitText.text))
+	blizz.scripts.OnLeave(); runTicks(60, 0.1)
+	assert(blizz.hitChip.shown and blizz.hitText.text == "6", "chip lost the hover number: " .. tostring(blizz.hitText.text))
+	spellTipText[3] = { "Blizzard", "Pounds the 8 nearest enemies." }   -- a card: the next hover shows it
+	blizz.scripts.OnEnter(); runTicks(6, 0.1); blizz.scripts.OnLeave(); runTicks(30, 0.1)
+	assert(blizz.hitText.text == "8", "hover after a card: " .. tostring(blizz.hitText.text))
+	-- a look that sees the same numbers moves the chip along with the card, hover or no hover
+	scanBlind = false
+	spellTipText[3] = { "Blizzard", "Pounds the 9 nearest enemies." }
+	runTicks(45, 0.1)
+	assert(blizz.hitText.text == "9", "look after a hover: " .. tostring(blizz.hitText.text))
+	spellTipText[3] = { "Blizzard", "Pounds the 5 nearest enemies." }
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(20, 0.1)
+	assert(blizz.hitText.text == "5", "look after a hover (down): " .. tostring(blizz.hitText.text))
+	-- a different tooltip over a skill's slot is not read as the skill's
+	GameTooltip.shown = false
 	-- /gw2 targets: what was read, for a report from the game
 	SlashCmdList["AZSGW2"]("targets")
 	assert(not GameTooltip.shown, "the report left the tooltip up")
