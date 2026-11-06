@@ -216,21 +216,25 @@ spellTipText = {}      -- book index -> the lines of the game's spell tooltip (f
 scanCalls = 0
 impl.SetOwner = function(self, f, a)
 	assert(type(f) == "table" and type(a) == "string")
-	if self._name == "AZSGW2ScanTip" then self.tipText = nil return end
+	self.tipText = nil
+	if self._name == "AZSGW2ScanTip" then return end
 	tipLines = {}; lastSetSpell = nil
 end
 impl.SetSpell = function(self, idx, book)
 	assert(type(idx) == "number" and book == "spell", "SetSpell args")
-	if self._name == "AZSGW2ScanTip" then
+	local nm = self._name
+	if nm == "AZSGW2ScanTip" or nm == "GameTooltip" then
 		scanCalls = scanCalls + 1
+		-- like the game: the tooltip is filled and shown; its lines are GameTooltipTextLeft1, 2, ...
 		local lines = spellTipText[idx] or { (GetSpellName(idx, "spell")) }
 		self.tipText = lines
+		self.shown = true
 		for i, t in ipairs(lines) do
-			local fs = _G["AZSGW2ScanTipTextLeft" .. i] or new("FontString", self, "AZSGW2ScanTipTextLeft" .. i)
+			local fs = _G[nm .. "TextLeft" .. i] or new("FontString", self, nm .. "TextLeft" .. i)
 			fs.fontSet = true; fs.text = t
 		end
-		return
 	end
+	if nm == "AZSGW2ScanTip" then return end
 	lastSetSpell = { idx, book }; tipLines = { "(game tooltip)" }
 end
 impl.NumLines = function(self) return self.tipText and #self.tipText or 0 end
@@ -248,7 +252,7 @@ end
 
 UIParent = new("Frame", nil, "UIParent")
 UIParent.w = 1024; UIParent.h = 768
-GameTooltip = new("Frame", nil, "GameTooltip")
+GameTooltip = new("Frame", nil, "GameTooltip"); GameTooltip.shown = false
 -- stock frames the addon should keep hidden
 local stockFrames = {}
 for _, n in ipairs({ "PlayerFrame", "PartyMemberFrame1", "PartyMemberFrame2", "BuffFrame", "MainMenuBar", "MainMenuExpBar", "ActionButton1", "ActionButton2", "TargetFrame" }) do
@@ -957,8 +961,9 @@ scenario("nameplates: the game's plates get the GW2 look", function()
 	end
 	local function show(pl) pl.frame.shown = true; this = pl.frame; if pl.frame.scripts.OnShow then pl.frame.scripts.OnShow() end end
 	local RED, GREEN = { 1, 0.05, 0.05 }, { 0.05, 1, 0.05 }
-	AZS_TARGET = nil; clientTarget = nil; AZS_UNITS = {}
-	local thug, captain, guard = nativePlate("Defias Thug", 80, RED, false), nativePlate("Defias Captain", 50, RED, true), nativePlate("Stormwind Guard", 100, GREEN, false)
+	AZS_TARGET = nil; clientTarget = nil
+	AZS_UNITS = { { kind = "elite", id = 2, name = "Defias Captain", hp = 2000, hpm = 4000, state = 0 } }
+	local thug, captain, guard = nativePlate("Defias Thug", 80, RED, false), nativePlate("Defias Captain", 50, RED, true), nativePlate("Zaynor", 100, GREEN, false)
 	for _, pl in ipairs({ thug, captain, guard }) do show(pl) end
 	-- an unrelated frame under WorldFrame (like a damage number's holder) and a plate-like frame without a health bar
 	local holder = new("Frame", WorldFrame); local ht = new("Texture", holder); ht.tex = "Interface\\Buttons\\WHITE8X8"
@@ -973,11 +978,12 @@ scenario("nameplates: the game's plates get the GW2 look", function()
 	assert(thug.border:GetAlpha() == 0 and thug.name:GetAlpha() == 0 and thug.hb:GetAlpha() == 0 and thug.glow:GetAlpha() == 0 and thug.icon:GetAlpha() == 0, "the game's own drawing is still visible")
 	assert(fake.azsPlate == false and holder.azsPlate == false, "a frame that is no plate was taken")
 	local pt, pc, pg = thug.frame.azsPlate, captain.frame.azsPlate, guard.frame.azsPlate
-	assert(pt.v.shown and pt.nameText.text == "Defias Thug" and pt.bar.lastFrac == 0.8, "enemy plate: " .. tostring(pt.nameText.text))
+	assert(pt.v.shown and pt.rawName == "Defias Thug" and pt.bar.lastFrac == 0.8, "enemy plate: " .. tostring(pt.rawName))
+	assert(pt.nameText == nil and pc.nameText == nil, "plates show no names")
 	assert(pt.bar.fill.vc[1] > pt.bar.fill.vc[2] and pt.bar.fill.vc[2] < 0.3, "enemy bar is red")
 	assert(pt.text.text == "" and not pt.mark.shown and not pt.hl.shown, "a plain enemy shows no number, no mark")
-	assert(pc.v.shown and pc.text.text == "50%" and (pc.mark.shown == (G.art.custom and true or false)), "elite: number, crown only with the custom art")
-	assert(pc.nameText.tcol[1] > 0.9 and pc.nameText.tcol[3] < 0.7 and pc.bar.fill.vc[3] < 0.2, "elite is gold")
+	assert(pc.v.shown and pc.text.text == "2.0K" and (pc.mark.shown == (G.art.custom and true or false)), "elite: number (from the API), crown only with the custom art: " .. tostring(pc.text.text))
+	assert(pc.bar.fill.vc[1] > 0.95 and pc.bar.fill.vc[2] > 0.4 and pc.bar.fill.vc[2] < 0.6 and pc.bar.fill.vc[3] < 0.15, "elite is orange")
 	assert(not pg.v.shown, "a friend shows without the friend option")
 	-- the plate itself is the parent: it moves with the unit
 	assert(pt.v.parent == thug.frame and pt.v.pts[1][2] == thug.frame, "our drawing is not on the plate")
@@ -993,7 +999,7 @@ scenario("nameplates: the game's plates get the GW2 look", function()
 	SlashCmdList["AZSGW2"]("plates friends on")
 	assert((plateCalls.friendShow or 0) == fs + 1 and FRIENDNAMEPLATES_ON == 1, "friendly plates not switched on")
 	runTicks(6, 0.1)
-	assert(pg.v.shown and pg.nameText.text == "Stormwind Guard" and pg.bar.fill.vc[2] > pg.bar.fill.vc[1], "friend plate")
+	assert(pg.v.shown and pg.rawName == "Zaynor" and pg.bar.fill.vc[2] > pg.bar.fill.vc[1], "friend plate (a hero)")
 	assert(pg.text.text == "" , "friend text")
 	-- your target: outline, exact health
 	clientTarget = { name = "Defias Thug", hostile = true, hp = 50, hpm = 100, class = "normal" }
@@ -1016,7 +1022,7 @@ scenario("nameplates: the game's plates get the GW2 look", function()
 	thug.frame.shown = false; show(thug)
 	assert(not pt.v.shown, "old unit still drawn after the plate was shown again")
 	runTicks(1, 0.1)
-	assert(pt.v.shown and pt.nameText.text == "Wolf" and pt.bar.lastFrac == 0.3, "plate not given to the new unit: " .. tostring(pt.nameText.text))
+	assert(pt.v.shown and pt.rawName == "Wolf" and pt.bar.lastFrac == 0.3, "plate not given to the new unit: " .. tostring(pt.rawName))
 	-- the unit dies: the bar goes
 	thug.hb.sbValue = 0
 	runTicks(8, 0.1)
@@ -1093,7 +1099,8 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	end
 	local function show(pl) pl.frame.shown = true; this = pl.frame; if pl.frame.scripts.OnShow then pl.frame.scripts.OnShow() end end
 	local RED, GREEN = { 1, 0.05, 0.05 }, { 0.05, 1, 0.05 }
-	AZS_TARGET = nil; clientTarget = nil; AZS_UNITS = {}; AZS_PETS = {}; AZS_TOTEMS = {}
+	AZS_TARGET = nil; clientTarget = nil
+	AZS_UNITS = { { kind = "elite", id = 1, name = "Bone Warden", hp = 3000, hpm = 5000, state = 0 } }
 	G.SetOpt("nameplates", true); G.SetOpt("platesElite", false); G.SetOpt("platesFriend", false); G.EnforcePlates()
 	local grunt, captain = nativePlate("Reanimated Corpse", 40, RED, false), nativePlate("Bone Warden", 60, RED, true)
 	show(grunt); show(captain)
@@ -1126,7 +1133,45 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	assert(fc[1] >= 0.95 and fc[2] > 0.4 and fc[2] < 0.6 and fc[3] < 0.15, "elite bar is not orange: " .. table.concat(fc, ","))
 	local gc = pg.bar.fill.vc
 	assert(gc[1] < 0.9 and gc[2] < 0.2, "plain enemy bar is not red")
-	assert(pc.nameText.tcol[1] > 0.95 and pc.nameText.tcol[3] < 0.6, "elite name colour")
+	assert(pc.nameText == nil and pg.nameText == nil, "no names under the bars")
+	-- only elites and guardians: decided by the API's list of special enemies, not by the game's level icon
+	local guardian = nativePlate("Risen Construct", 70, RED, false)               -- a guardian: no elite icon on the game's plate
+	local lord = nativePlate("Lord Ashvane", 90, RED, false)                      -- a boss
+	local ghoul = nativePlate("Rotting Ghoul", 90, RED, true)                     -- the game's icon says elite, the API has no such unit
+	local skullie = nativePlate("Level Skull", 90, RED, false); skullie.icon.tex = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"; skullie.icon.shown = true
+	AZS_UNITS = { { kind = "elite", id = 1, name = "Bone Warden", hp = 3000, hpm = 5000, state = 0 },
+		{ kind = "guardian", id = 2, name = "Risen Construct", hp = 800, hpm = 1000, state = 1 },
+		{ kind = "boss", id = 3, name = "Lord Ashvane", hp = 9000, hpm = 9000, state = 0 } }
+	for _, pl in ipairs({ guardian, lord, ghoul, skullie }) do show(pl) end
+	runTicks(8, 0.1)
+	local pgd, plo, pgh, psk = guardian.frame.azsPlate, lord.frame.azsPlate, ghoul.frame.azsPlate, skullie.frame.azsPlate
+	assert(pgd.v.shown and plo.v.shown and pgh.v.shown and psk.v.shown and pg.v.shown, "all enemies show with the filter off")
+	assert(pgd.bar.fill.vc[1] >= 0.95 and pgd.bar.fill.vc[3] < 0.15, "a guardian from the API list is orange")
+	assert(plo.bar.fill.vc[1] >= 0.95 and plo.mark.shown, "a boss from the API list is orange, with the skull")
+	assert(pgh.bar.fill.vc[1] < 0.9 and pgh.bar.fill.vc[2] < 0.2, "an ordinary unit with an elite icon is red: " .. table.concat(pgh.bar.fill.vc, ","))
+	assert(psk.bar.fill.vc[1] < 0.9 and not psk.mark.shown, "an ordinary unit with a skull level is red and has no boss mark")
+	SlashCmdList["AZSGW2"]("plates elite on")
+	runTicks(8, 0.1)
+	assert(pc.v.shown and pgd.v.shown and plo.v.shown, "elites, guardians and bosses show with the filter on")
+	assert(not pg.v.shown and not pgh.v.shown and not psk.v.shown, "ordinary enemies still show with the filter on")
+	assert(grunt.hb:GetAlpha() == 0 and ghoul.hb:GetAlpha() == 0, "the game's own plates of the hidden enemies are visible")
+	-- an elite that spawns later is picked up within a second or two
+	local late = nativePlate("Fresh Spawn", 90, RED, false); show(late); runTicks(4, 0.1)
+	assert(not late.frame.azsPlate.v.shown, "ordinary spawn shows with the filter on")
+	AZS_UNITS[#AZS_UNITS + 1] = { kind = "elite", id = 9, name = "Fresh Spawn", hp = 100, hpm = 100, state = 0 }
+	runTicks(30, 0.1)
+	assert(late.frame.azsPlate.v.shown, "a new elite was not picked up")
+	-- no API list at all (an older game): the game's level icon decides
+	local keepUnits = AZS_UNITS; AZS_UNITS = nil
+	runTicks(30, 0.1)
+	assert(pgh.v.shown and not pgd.v.shown, "without the API list the icon decides: " .. tostring(pgh.v.shown) .. tostring(pgd.v.shown))
+	AZS_UNITS = keepUnits
+	runTicks(30, 0.1)
+	assert(not pgh.v.shown and pgd.v.shown, "the API list is trusted again")
+	SlashCmdList["AZSGW2"]("plates elite off")
+	runTicks(8, 0.1)
+	for _, pl in ipairs({ guardian, lord, ghoul, skullie, late }) do pl.frame.shown = false end
+
 	-- the game's mark (skull) on a plate is drawn above our bar, the game's own icon is invisible
 	captain.raid.shown = true; captain.raid.tc = { 0.75, 0.25, 0.75, 0.5, 1, 0.25, 1, 0.5 }
 	runTicks(3, 0.1)
@@ -1147,35 +1192,58 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	-- plates are released when the options go: everything visible again, no leftovers
 	odd.frame.shown = false
 
-	-- pets and totems on the friendly plates
-	local wolf, totem, bob, tree = nativePlate("Wolf", 100, GREEN, false), nativePlate("Searing Totem", 100, GREEN, false), nativePlate("Bob", 100, GREEN, false), nativePlate("Stoneclaw", 100, GREEN, false)
-	for _, pl in ipairs({ wolf, totem, bob, tree }) do show(pl) end
-	AZS_PETS = { { id = 1, name = "Wolf" } }
+	-- friendly plates: pets and totems are shown by default, each can be switched off on its own; heroes always show
+	local hero, wolf, totem, tree = nativePlate("Zaynor", 100, GREEN, false), nativePlate("Fluffy", 100, GREEN, false), nativePlate("Healing Stream Totem IV", 100, GREEN, false), nativePlate("Stoneclaw", 100, GREEN, false)
+	local hero2 = nativePlate("Carolin", 100, GREEN, false)
+	for _, pl in ipairs({ hero, hero2, wolf, totem, tree }) do show(pl) end
 	AZS_TOTEMS = { { key = "stoneclaw_totem", name = "Stoneclaw" } }
-	assert(G.Opt("platesPets") == true, "excluding pets is the default")
+	assert(G.Opt("friendPets") == true and G.Opt("friendTotems") == true, "pets and totems show by default")
 	G.SetOpt("platesFriend", true); G.EnforcePlates()
 	runTicks(14, 0.1)
-	local pw, pt, pb, ps = wolf.frame.azsPlate, totem.frame.azsPlate, bob.frame.azsPlate, tree.frame.azsPlate
-	assert(pb.v.shown, "a friend has no plate")
-	assert(not pw.v.shown and not pt.v.shown and not ps.v.shown, "pets and totems have plates: " .. tostring(pw.v.shown) .. tostring(pt.v.shown) .. tostring(ps.v.shown))
-	assert(wolf.hb:GetAlpha() == 0, "the game's own plate of a pet shows next to nothing")
+	local ph, ph2, pw, pt, ps = hero.frame.azsPlate, hero2.frame.azsPlate, wolf.frame.azsPlate, totem.frame.azsPlate, tree.frame.azsPlate
+	assert(ph.v.shown and ph2.v.shown and pw.v.shown and pt.v.shown and ps.v.shown, "friendly plates are missing with the defaults")
+	-- pets off: only the pets / summons go
 	SlashCmdList["AZSGW2"]("plates pets off")
-	runTicks(6, 0.1)
-	assert(pw.v.shown and pt.v.shown and ps.v.shown, "pets still excluded with the option off")
+	runTicks(8, 0.1)
+	assert(not pw.v.shown, "a pet still has a plate with the option off")
+	assert(ph.v.shown and ph2.v.shown and pt.v.shown and ps.v.shown, "heroes or totems lost their plates with the pets option off")
+	assert(wolf.hb:GetAlpha() == 0, "the game's own plate of a pet shows")
+	-- totems off too: both kinds of totem (by the API's list and by the name) go, heroes stay
+	SlashCmdList["AZSGW2"]("plates totems off")
+	runTicks(8, 0.1)
+	assert(not pw.v.shown and not pt.v.shown and not ps.v.shown and ph.v.shown and ph2.v.shown, "both off: only heroes should stay")
+	-- pets back on, totems still off
 	SlashCmdList["AZSGW2"]("plates pets on")
 	runTicks(8, 0.1)
-	assert(not pw.v.shown and not pt.v.shown and pb.v.shown, "pets not excluded again")
-	-- a pet that arrives after the list
+	assert(pw.v.shown and not pt.v.shown and not ps.v.shown and ph.v.shown, "pets on, totems off")
+	-- the settings rows work the same
+	local rows = {}
+	for _, c in ipairs(G.settings.checks) do rows[c.row.label] = c end
+	assert(rows["   show pets and summons"] and rows["   show totems"], "settings rows for pets and totems missing")
+	rows["   show totems"].scripts.OnClick()
+	assert(G.Opt("friendTotems") == true, "the totems row does not switch it")
+	runTicks(8, 0.1)
+	assert(pt.v.shown and ps.v.shown and pw.v.shown, "totems did not come back")
+	rows["   show pets and summons"].scripts.OnClick()
+	assert(G.Opt("friendPets") == false)
+	runTicks(8, 0.1)
+	assert(not pw.v.shown and pt.v.shown, "the pets row does not switch it")
+	rows["   show pets and summons"].scripts.OnClick()
+	assert(G.Opt("friendPets") == true)
+	runTicks(8, 0.1)
+	-- a new unknown friend (a summon) follows the pets option
 	local imp = nativePlate("Imp", 100, GREEN, false); show(imp); runTicks(6, 0.1)
-	assert(imp.frame.azsPlate.v.shown, "unknown friend should show")
-	AZS_PETS = { { id = 1, name = "Wolf" }, { id = 2, name = "Imp" } }
-	runTicks(10, 0.1)
-	assert(not imp.frame.azsPlate.v.shown, "a new pet was not left out")
-	-- enemies are not touched by the pet option
+	assert(imp.frame.azsPlate.v.shown, "a new summon should show with the pets option on")
+	G.SetOpt("friendPets", false); runTicks(6, 0.1)
+	assert(not imp.frame.azsPlate.v.shown, "a new summon should go with the pets option off")
+	G.SetOpt("friendPets", true)
+	-- enemies are not touched by these options
+	G.SetOpt("friendPets", false); G.SetOpt("friendTotems", false); runTicks(6, 0.1)
 	assert(pg.v.shown, "enemy plate gone")
+	G.SetOpt("friendPets", true); G.SetOpt("friendTotems", true)
 	G.SetOpt("platesFriend", false); G.EnforcePlates(); runTicks(4, 0.1)
-	for _, pl in ipairs({ wolf, totem, bob, tree, imp, odd }) do pl.frame.shown = false end
-	AZS_PETS = {}; AZS_TOTEMS = {}
+	for _, pl in ipairs({ hero, hero2, wolf, totem, tree, imp, odd }) do pl.frame.shown = false end
+	AZS_TOTEMS = {}
 
 	-- marks: bosses and guardians get the game's icons when they are targeted
 	local setCalls, marked, kinds = {}, {}, {}
@@ -1281,8 +1349,8 @@ scenario("settings window + unlock layout", function()
 	local labels = {}
 	for _, c in ipairs(f.checks) do labels[c.row.label] = true end
 	assert(labels["   only elites and guardians"] and labels["Enable friendly nameplates"] and labels["Max targets, on the skills"]
-		and labels["   not for pets and totems"] and labels["Mark bosses and guardians"], "settings rows missing")
-	assert(f:GetHeight() <= 600, "settings window too tall: " .. f:GetHeight())
+		and labels["   show pets and summons"] and labels["   show totems"] and labels["Mark bosses and guardians"], "settings rows missing")
+	assert(f:GetHeight() <= 640, "settings window too tall: " .. f:GetHeight())
 	-- minimap switch detaches and re-attaches the game's minimap
 	for _, c in ipairs(f.checks) do if c.row.label == "GW2 minimap" then c.scripts.OnClick() end end
 	assert(Minimap.parent == MinimapCluster and not G.mm:IsShown(), "minimap option off did not hand the map back")
@@ -1676,7 +1744,51 @@ scenario("skills: the most targets a skill can hit, from its tooltip", function(
 	assert(scanCalls == c1, "reads the tooltip with the option off")
 	G.SetOpt("hits", true); runTicks(30, 0.1)
 	assert(blizz.hitChip.shown, "chip not back with the option on")
-	-- no scan tooltip in this client: nothing breaks
+	-- the game's tooltip is the one that is read, and it is hidden again each time
+	assert(not GameTooltip.shown, "the game's tooltip was left up")
+	frost.tgtKey = nil; blizz.tgtKey = nil
+	spellTipText[3] = { "Blizzard", "Pounds the 4 nearest enemies." }
+	runTicks(30, 0.1)
+	assert(blizz.hitText.text == "4" and not GameTooltip.shown, "read through the game's tooltip: " .. tostring(blizz.hitText.text))
+	-- while a tooltip is up (the player hovers something) it is not touched; the chip stays, and is read when it is free
+	GameTooltip.shown = true
+	local c2 = scanCalls
+	spellTipText[3] = { "Blizzard", "Pounds the 6 nearest enemies." }
+	runTicks(30, 0.1)
+	assert(scanCalls == c2, "the tooltip was read while another was up")
+	assert(blizz.hitText.text == "4", "chip changed without a read")
+	GameTooltip.shown = false
+	runTicks(30, 0.1)
+	assert(blizz.hitText.text == "6", "chip did not follow once the tooltip was free: " .. tostring(blizz.hitText.text))
+	-- hovering a skill shows the game's tooltip for it, with the numbers: nothing of that is disturbed by the reads
+	blizz.scripts.OnEnter(); runTicks(30, 0.1)
+	assert(GameTooltip.shown and lastSetSpell and lastSetSpell[1] == 3, "hover tooltip was disturbed")
+	blizz.scripts.OnLeave(); runTicks(10, 0.1)
+	-- a game whose tooltip stays up for ever: the spare tooltip is used after a while
+	GameTooltip.shown = true
+	spellTipText[3] = { "Blizzard", "Pounds the 8 nearest enemies." }
+	runTicks(160, 0.1)
+	assert(blizz.hitText.text == "8", "spare tooltip not used: " .. tostring(blizz.hitText.text))
+	GameTooltip.shown = false
+	-- a card is picked (the game says its spells / stats changed): +2 targets are on the chip within a few seconds
+	spellTipText[2] = { "Frostbolt", "Hurls the 4 nearest enemies." }
+	runTicks(40, 0.1)
+	assert(frost.hitText.text == "4")
+	spellTipText[2] = { "Frostbolt", "Hurls the 6 nearest enemies." }
+	AZS_STATS_UPDATED = ( AZS_STATS_UPDATED or 0 ) + 1
+	runTicks(8, 0.1)
+	assert(frost.hitText.text == "6", "chip did not follow the card: " .. tostring(frost.hitText.text))
+	-- colour codes in the text do not hide the number
+	spellTipText[2] = { "Frostbolt", "Hurls the |cffffd1005|r nearest enemies for |cff00ff00300|r damage." }
+	AZS_SPELLS_UPDATED = ( AZS_SPELLS_UPDATED or 0 ) + 1
+	runTicks(30, 0.1)
+	assert(frost.hitText.text == "5", "colour codes: " .. tostring(frost.hitText.text))
+	spellTipText[2] = { "Frostbolt", "Hurls a bolt at the nearest enemy for 300 Frost damage." }
+	AZS_SPELLS_UPDATED = AZS_SPELLS_UPDATED + 1
+	runTicks(30, 0.1)
+	-- /gw2 targets: what was read, for a report from the game
+	SlashCmdList["AZSGW2"]("targets")
+	assert(not GameTooltip.shown, "the report left the tooltip up")
 	print("max targets chip ok")
 end)
 

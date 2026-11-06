@@ -3,11 +3,11 @@
 ## 1.8.1
 
 **New**
-- **Nameplates in the Guild Wars 2 style.** A small glossy red bar with the name under it, the health inside for your target, a white outline on the target's plate, a crown (elite) or skull (boss) mark. Settings: *Enable nameplates*, *only elites and guardians*, *Enable friendly nameplates* (also `/gw2 plates ...`). They are off by default. The game's own V key for nameplates now works as usual: it used to be undone after about half a second.
+- **Nameplates in the Guild Wars 2 style.** A small glossy red bar (no name: that is on the target bar), the health inside for your target, a white outline on the target's plate, a crown (elite) or skull (boss) mark. Settings: *Enable nameplates*, *only elites and guardians*, *Enable friendly nameplates* (also `/gw2 plates ...`). They are off by default. The game's own V key for nameplates now works as usual: it used to be undone after about half a second.
 - **New target bar** in the style of Guild Wars 2: a wide flat bar, glossy fill, dark frame, name left and health with percent right, a round badge at the right end (crown for elites, small skull otherwise). Orange for elites and guardians, green for friends.
-- **Max targets:** a small round number on top of a skill says how many enemies it can hit at most, with the +targets from upgrades and cards in it (Multi-Shot: 5). It is read from the skill's own tooltip, so you do not need enemies near and no longer have to hover. It shows from 2 on. *Max targets, on the skills* turns it off.
+- **Max targets:** a small round number on top of a skill says how many enemies it can hit at most, with the +targets from upgrades and cards in it (Multi-Shot: 5). It is read from the game's tooltip of the skill (shown for a moment without being drawn, only while no other tooltip is up), so you do not need enemies near and no longer have to hover. It follows a card within a few seconds (Aimed Shot 4 -> 6). It shows from 2 on. *Max targets, on the skills* turns it off; `/gw2 targets` shows what was read.
 - **Marks:** when you target a boss, it gets the game's skull; a guardian gets the cross. A boss you point at is marked too. A mark that is already there is not changed. *Mark bosses and guardians* (or `/gw2 marks on | off`). The marks show above the bar on the nameplates.
-- **Friendly nameplates: leave out pets and totems** (*not for pets and totems*, on by default; `/gw2 plates pets on | off`).
+- **Friendly nameplates: pets and totems are your choice.** *show pets and summons* and *show totems* (both on by default; `/gw2 plates pets on | off`, `/gw2 plates totems on | off`). Heroes always show.
 - **Resize every part on its own** in the unlocked layout: drag the corner of a gold box or use the mouse wheel; right click puts the size back. The box shows its size. A bar at the top of the screen locks the layout again. "Size" in the settings still changes everything at once.
 
 **Changed**
@@ -19,6 +19,7 @@
 - The talent proc / "recharging" icons above the left skills: they showed empty icons (and nothing for Hot Streak).
 
 **Fixed**
+- **"Only elites and guardians" did not work.** It now goes by the API's list of special enemies (elites, guardians, bosses) instead of the game's plate icon, so guardians and bosses are found and ordinary enemies are not mistaken for them.
 - **Two health bars on a nameplate** (the game's own bar showed next to ours after a while). The addon now looks at every plate again and hides the game's bar whenever it comes back, and the cast bar the game adds later. If it still happens, `/gw2 plates debug` lists the parts of two plates.
 - **The 10 second DPS stopped after about 20 seconds on pet builds** and only came back after a reset. It now asks the game's meter API for the recent rate (pets, summons and totems included) and, if the game cannot answer, works it out itself without starting over when a line drops out of the list.
 

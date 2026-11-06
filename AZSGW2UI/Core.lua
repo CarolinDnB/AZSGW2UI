@@ -14,7 +14,6 @@ G.FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF";
 G.GOLD = { 0.80, 0.66, 0.38 };
 G.GOLDLIGHT = { 0.96, 0.86, 0.58 };
 G.COLOR_ELITE = { 1.00, 0.50, 0.05 };    -- the bar of an elite or a guardian (target bar, nameplates): orange among the reds
-G.NAME_ELITE = { 1.00, 0.82, 0.50 };
 
 G.CLASSICON = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes";
 G.CLASSCOORDS = {
@@ -63,7 +62,7 @@ G.HUD_MAP_PARTS = { "flag", "localClock" };
 G.OPTDEF = {
 	dmg = true, dmgPet = true, dmgCrit = false, dmgTicks = true, dmgNative = false, minimap = true, pinChest = true, pinGuard = true, arrows = true,
 	target = true, party = true, revive = true, meter = true, guardians = true, charPanel = true, hits = true,
-	nameplates = false, platesElite = false, platesFriend = false, platesPets = true, marks = true,
+	nameplates = false, platesElite = false, platesFriend = false, friendPets = true, friendTotems = true, marks = true,
 };
 
 G.art = { custom = true };

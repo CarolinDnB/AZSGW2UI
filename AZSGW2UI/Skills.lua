@@ -677,15 +677,18 @@ end
 
 ------------------------------------------------------------------------ how many targets a skill can hit
 
--- The game's own spell tooltip says it ("Strikes the 5 nearest enemies within 30 yd ..."), and the +targets of upgrades
--- and cards are already in that number. So a hidden tooltip of ours is given the spell and its text is read: the number
--- on the chip is the most the skill can hit, whether or not that many enemies are near. A skill for one enemy shows
--- nothing. One skill is read per look (a changed skill first, the others about every three seconds, as upgrades come
--- and go), never all of them at once.
-local TGT_AGE = 3;
+-- The game's own spell tooltip says it ("Strikes the 5 nearest enemies within 30 yd ..."): the game writes the numbers of
+-- your hero (upgrades, cards) into the tooltip it shows, so that is where the number is read. The tooltip is given the
+-- spell and its text read in the same moment, then hidden again: nothing is ever drawn. It is only done while no tooltip
+-- is up (while you hover something, the tooltip is yours), one skill per look, a changed skill first. The number on the
+-- chip is the most the skill can hit, whether or not that many enemies are near; a skill for one enemy shows nothing.
+local TGT_AGE = 2;              -- a skill is read again after this many seconds (an upgrade changes the text)
+local TGT_BUSY = 10;            -- seconds with a tooltip up before the spare tooltip is used instead
 local scanTip = nil;
+local tgtBusySince = nil;
 
-local function ScanTip()
+-- a tooltip of ours, for a game where the game's own is busy for long
+local function SpareTip()
 	if ( scanTip == nil ) then
 		scanTip = false;
 		local ok, tt = pcall(CreateFrame, "GameTooltip", "AZSGW2ScanTip", UIParent, "GameTooltipTemplate");
@@ -696,13 +699,42 @@ local function ScanTip()
 	return scanTip or nil;
 end
 
+-- the tooltip to read with, and the name its lines have: nil when none is free right now
+local function FreeTip()
+	local gt = GameTooltip;
+	if ( gt and gt.SetSpell and gt.SetOwner and gt.NumLines and gt.IsShown ) then
+		if ( not gt:IsShown() ) then
+			tgtBusySince = nil;
+			return gt, "GameTooltip";
+		end
+		local now = GetTime();
+		tgtBusySince = tgtBusySince or now;
+		if ( now - tgtBusySince < TGT_BUSY ) then
+			return nil;
+		end
+	end
+	local spare = SpareTip();
+	if ( spare ) then
+		return spare, "AZSGW2ScanTip";
+	end
+	return nil;
+end
+
 -- "Strikes the 5 nearest enemies within 30 yd" -> 5. Lines of upgrades and bonuses ("+1 target") are not the description.
 local function TargetsInText(text)
 	local s = string.lower(text);
+	s = string.gsub(s, "|c%x%x%x%x%x%x%x%x", "");
+	s = string.gsub(s, "|r", "");
 	if ( string.find(s, "%+%d+ target") or string.find(s, "^upgrades") or string.find(s, "^your bonuses") ) then
 		return nil;
 	end
 	local _, _, n = string.find(s, "(%d+) nearest enem");
+	if ( not n ) then
+		_, _, n = string.find(s, "(%d+) closest enem");
+	end
+	if ( not n ) then
+		_, _, n = string.find(s, "nearest (%d+) enem");
+	end
 	if ( not n ) then
 		_, _, n = string.find(s, "up to (%d+) enem");
 	end
@@ -728,14 +760,15 @@ local function KeyOf(e)
 	return tostring(e.key) .. ":" .. tostring(math.floor(G.Num(e.rank)));
 end
 
-local function ReadTargets(b)
+-- reads the tooltip of the skill in slot b; false when no tooltip was free (it is tried again at the next look).
+-- dump: a table that gets the lines read, for /gw2 targets
+local function ReadTargets(b, dump)
 	local e = b.entry;
 	local now = GetTime();
-	b.tgtAt = now;
 	if ( not e ) then
-		b.tgtKey = nil;
+		b.tgtKey, b.tgtAt = nil, now;
 		SetHits(b, 0);
-		return;
+		return true;
 	end
 	local key = KeyOf(e);
 	if ( b.tgtKey ~= key ) then
@@ -752,34 +785,68 @@ local function ReadTargets(b)
 		end
 	end
 	local n = 0;
-	local tt = b.bookIdx and ScanTip();
-	if ( tt ) then
+	if ( b.bookIdx ) then
+		local tt, prefix = FreeTip();
+		if ( not tt ) then
+			return false;
+		end
 		tt:SetOwner(UIParent, "ANCHOR_NONE");
 		local ok = pcall(tt.SetSpell, tt, b.bookIdx, "spell");
 		if ( ok ) then
-			for i = 2, tt:NumLines() do
-				local fs = getglobal("AZSGW2ScanTipTextLeft" .. i);
+			for i = 1, tt:NumLines() do
+				local fs = getglobal(prefix .. "TextLeft" .. i);
 				local text = fs and fs:GetText();
 				if ( text ) then
-					local c = TargetsInText(text);
-					if ( c ) then
-						n = c;
-						break;
+					if ( dump ) then
+						table.insert(dump, text);
+					end
+					if ( i >= 2 ) then
+						local c = TargetsInText(text);
+						if ( c ) then
+							n = c;
+							break;
+						end
 					end
 				end
 			end
 		end
 		tt:Hide();
 	end
+	b.tgtAt = now;
+	b.tgtN = n;
 	if ( n >= 2 ) then
 		SetHits(b, math.min(n, 99));
 	else
 		SetHits(b, 0);
 	end
+	return true;
 end
 
 G.tgtCursor = 0;
 G.tgtOff = false;
+G.tgtSeen = {};
+
+local function SlotAt(i)
+	if ( i == 7 ) then
+		return G.racial;
+	end
+	return G.slots[i];
+end
+
+-- the game says when your spells or stats changed (a card was picked): every skill is read again soon
+local function ChangedUpgrades()
+	local a, b = AZS_SPELLS_UPDATED, AZS_STATS_UPDATED;
+	if ( G.tgtSeen.a == a and G.tgtSeen.b == b ) then
+		return;
+	end
+	G.tgtSeen.a, G.tgtSeen.b = a, b;
+	for i = 1, 7 do
+		local sl = SlotAt(i);
+		if ( sl ) then
+			sl.tgtAt = nil;
+		end
+	end
+end
 
 function G.UpdateTargets(dt)
 	if ( not G.slots[1] ) then
@@ -789,29 +856,24 @@ function G.UpdateTargets(dt)
 		if ( not G.tgtOff ) then
 			G.tgtOff = true;
 			for i = 1, 7 do
-				local b = G.slots[i];
-				if ( i == 7 ) then
-					b = G.racial;
-				end
-				if ( b ) then
-					SetHits(b, 0);
-					b.tgtKey, b.tgtAt = nil, nil;
+				local sl = SlotAt(i);
+				if ( sl ) then
+					SetHits(sl, 0);
+					sl.tgtKey, sl.tgtAt = nil, nil;
 				end
 			end
 		end
 		return;
 	end
 	G.tgtOff = false;
+	ChangedUpgrades();
 	local now = GetTime();
 	-- a skill that changed (or is new) is read first
 	local pick = nil;
 	for i = 1, 7 do
-		local b = G.slots[i];
-		if ( i == 7 ) then
-			b = G.racial;
-		end
-		if ( b and b.entry and b.tgtKey ~= KeyOf(b.entry) ) then
-			pick = b;
+		local sl = SlotAt(i);
+		if ( sl and sl.entry and sl.tgtKey ~= KeyOf(sl.entry) ) then
+			pick = sl;
 			break;
 		end
 	end
@@ -822,18 +884,35 @@ function G.UpdateTargets(dt)
 			if ( G.tgtCursor > 7 ) then
 				G.tgtCursor = 1;
 			end
-			local b = G.slots[G.tgtCursor];
-			if ( G.tgtCursor == 7 ) then
-				b = G.racial;
-			end
-			if ( b and b.entry and now - ( b.tgtAt or -100 ) >= TGT_AGE ) then
-				pick = b;
+			local sl = SlotAt(G.tgtCursor);
+			if ( sl and sl.entry and now - ( sl.tgtAt or -100 ) >= TGT_AGE ) then
+				pick = sl;
 				break;
 			end
 		end
 	end
 	if ( pick ) then
 		ReadTargets(pick);
+	end
+end
+
+-- /gw2 targets: what each skill's tooltip says and what was made of it, to find out why a number is missing
+function G.TargetsReport()
+	G.Print("max targets: option " .. ( G.Opt("hits") and "on" or "off" ) .. ", GameTooltip " .. ( GameTooltip and "found" or "missing" )
+		.. ", spellbook functions " .. tostring( GetSpellName ~= nil and GetNumSpellTabs ~= nil ));
+	for i = 1, 7 do
+		local sl = SlotAt(i);
+		if ( sl and sl.entry ) then
+			local dump = {};
+			local info = G.abilityInfo[sl.entry.key];
+			sl.tgtKey = nil;
+			local ok = ReadTargets(sl, dump);
+			G.Print(i .. ": " .. G.Plain(tostring(( info and info.name ) or sl.entry.key)) .. ", rank " .. tostring(sl.entry.rank) .. ", book entry "
+				.. tostring(sl.bookIdx) .. ", " .. ( ok and ( "targets read: " .. tostring(sl.tgtN) ) or "no tooltip free" ) .. ", " .. table.getn(dump) .. " lines");
+			for k = 1, math.min(table.getn(dump), 6) do
+				G.Print("    " .. G.Plain(string.sub(dump[k], 1, 90)));
+			end
+		end
 	end
 end
 

@@ -1,17 +1,17 @@
 -- AZS GW2 UI: Plates.lua
--- Nameplates in the look of this UI (1.8.1): a thin red bar with the health number in it, the name under it,
--- a crown for elites and a white outline on your target, like Guild Wars 2. Own art.
+-- Nameplates in the look of this UI (1.8.1): a thin red bar with the health number in it, orange for elites and
+-- guardians, a crown for elites and a white outline on your target, like Guild Wars 2. Own art.
 --
 -- The game keeps doing the work: it decides which enemies and friends get a plate, where it stands and how
 -- full its health is. Its plates are frames under WorldFrame; this file recognises them, makes their own drawing
--- invisible (alpha 0, so the game's own Show / Hide still tells us what the unit is) and hangs its own bar and name
--- on them. The same plate that was a red bar with a border is now this one, at the same place. If the game's plates
+-- invisible (alpha 0, so the game's own Show / Hide still tells us what the unit is) and hangs its own bar on them. The same plate that was a red bar with a border is now this one, at the same place. If the game's plates
 -- are not what this file expects, nothing is hidden and the game's own plates stay as they were.
 --
 -- The game may give a plate's drawing back at any time (it reuses a plate for the next enemy), so the plate is looked at
 -- again: if the game made anything visible again, it is made invisible again.
 --
--- Options: Enable Nameplates (enemies), Only Elites and Guardians, Enable Friendly Nameplates (and not for pets and totems).
+-- Options: Enable Nameplates (enemies), Only Elites and Guardians, Enable Friendly Nameplates (heroes only, no pets, summons
+-- or totems). The plates show a bar and no name: the name is for the target bar.
 -- This file also marks bosses and guardians with the game's own raid icons when you target them (option "marks").
 
 local G = AZSGW2;
@@ -25,7 +25,6 @@ local IDENTIFY = 12;        -- a plate is read for name, kind and colour again e
 local COLOR_ENEMY = { 0.80, 0.14, 0.12 };
 local COLOR_NEUTRAL = { 0.86, 0.74, 0.18 };
 local COLOR_ELITE = G.COLOR_ELITE;                  -- orange: elites and guardians stand out among the red
-local NAME_ELITE = G.NAME_ELITE;
 local COLOR_FRIEND = { 0.30, 0.72, 0.22 };
 
 G.plates = { list = {}, seen = 0, cursor = 1, fresh = {}, active = false };
@@ -122,7 +121,7 @@ function G.PlateBuild(p)
 	local plate = p.frame;
 	local v = CreateFrame("Frame", nil, plate);
 	v:SetWidth(BARW);
-	v:SetHeight(BARH + 16);
+	v:SetHeight(BARH);
 	v:SetPoint("TOP", plate, "TOP", 0, 0);
 	v:Hide();
 	p.v = v;
@@ -135,8 +134,6 @@ function G.PlateBuild(p)
 	tf:SetFrameLevel(p.bar:GetFrameLevel() + 3);
 	p.text = G.Text(tf, 8, "CENTER");
 	p.text:SetPoint("CENTER", p.bar, "CENTER", 0, 0);
-	p.nameText = G.Text(tf, 10, "CENTER");
-	p.nameText:SetPoint("TOP", p.bar, "BOTTOM", 0, -2);
 
 	local hl = CreateFrame("Frame", nil, v);
 	hl:SetPoint("TOPLEFT", p.bar, "TOPLEFT", -2, 2);
@@ -229,6 +226,30 @@ local function IsEnemyColor(r, g, b)
 	return false, false;
 end
 
+-- What the AZS API says about a plate's name: the list of special enemies alive (elites, guardians, bosses) is complete,
+-- so a name that is not in it is an ordinary enemy, whatever icon the game's plate carries. Returns the kind of the unit
+-- ("final", "boss", "guardian", "elite" or nil) and whether the list is there at all.
+local function SpecialKind(name)
+	local list = AZS_UNITS;
+	if ( type(list) ~= "table" ) then
+		return nil, false;
+	end
+	local best = nil;
+	for i = 1, table.getn(list) do
+		local u = list[i];
+		if ( type(u) == "table" and u.name == name ) then
+			local k = u.kind or "elite";
+			if ( k == "final" or k == "boss" ) then
+				return k, true;
+			end
+			if ( not best or k == "guardian" ) then
+				best = k;
+			end
+		end
+	end
+	return best, true;
+end
+
 local function SpecialHealth(name)
 	local found, count = nil, 0;
 	local list = AZS_UNITS;
@@ -246,45 +267,54 @@ local function SpecialHealth(name)
 	return nil;
 end
 
--- the names of pets, summons and totems (yours and your party's): their friendly plates can be left out
-local petNames = {};
-local petRead = -100;
+-- Friendly plates: a hero (you and your party), a totem, or else a pet / summon / other friendly creature. The player
+-- chooses whether pets and totems get a plate. Heroes are known by name (their own and the party's); a totem by its
+-- name (the API's list of your totems, or "Totem" in the name); everything else that is friendly and no hero is
+-- a pet or summon, whatever it is called.
+local heroNames = {};
+local totemNames = {};
+local heroRead = -100;
 
-local function ReadPets()
+local function ReadHeroes()
 	local now = GetTime();
-	if ( now - petRead < 0.5 ) then
+	if ( now - heroRead < 0.5 ) then
 		return;
 	end
-	petRead = now;
-	petNames = {};
-	local lists = { AZS_PETS, AZS_TOTEMS };
-	for k = 1, 2 do
-		local list = lists[k];
-		if ( type(list) == "table" ) then
-			for i = 1, table.getn(list) do
-				local e = list[i];
-				if ( type(e) == "table" and type(e.name) == "string" ) then
-					petNames[e.name] = true;
-				end
+	heroRead = now;
+	heroNames = {};
+	totemNames = {};
+	local totems = AZS_TOTEMS;
+	if ( type(totems) == "table" ) then
+		for i = 1, table.getn(totems) do
+			if ( type(totems[i]) == "table" and type(totems[i].name) == "string" ) then
+				totemNames[totems[i].name] = true;
 			end
 		end
 	end
-	local units = { "pet", "partypet1", "partypet2", "partypet3", "partypet4" };
-	for i = 1, 5 do
-		if ( UnitExists and UnitExists(units[i]) ) then
-			local n = UnitName(units[i]);
+	local me = UnitName("player");
+	if ( me ) then
+		heroNames[me] = true;
+	end
+	for i = 1, 4 do
+		local u = "party" .. i;
+		if ( UnitExists(u) ) then
+			local n = UnitName(u);
 			if ( n ) then
-				petNames[n] = true;
+				heroNames[n] = true;
 			end
 		end
 	end
 end
 
-local function IsPetName(name)
-	if ( petNames[name] ) then
+-- does a friendly plate get drawn: heroes always, totems and pets as the options say
+local function FriendShown(name)
+	if ( heroNames[name] ) then
 		return true;
 	end
-	return string.find(name, " Totem$") ~= nil;                  -- every totem is called that, whoever dropped it
+	if ( totemNames[name] or string.find(name, "Totem", 1, true) ) then
+		return G.Opt("friendTotems");
+	end
+	return G.Opt("friendPets");
 end
 
 local function PlateText(name, frac, v, hi, isTarget, elite)
@@ -316,7 +346,12 @@ local function Identify(p)
 	local name = p.name:GetText() or "";
 	local tex = p.icon:IsShown() and p.icon:GetTexture() or nil;
 	local elite, boss = false, false;
-	if ( type(tex) == "string" ) then
+	local special, listed = SpecialKind(name);
+	if ( listed ) then
+		elite = special ~= nil;
+		boss = ( special == "boss" or special == "final" );
+	elseif ( type(tex) == "string" ) then
+		-- no list from the API (an older game): the level icon of the game's plate says it
 		if ( string.find(tex, "Skull") ) then
 			boss = true;
 			elite = true;
@@ -339,19 +374,13 @@ local function Identify(p)
 	end
 	if ( p.cName ~= name or p.cKind ~= kind or p.cBoss ~= boss ) then
 		p.cName, p.cKind, p.cBoss = name, kind, boss;
-		p.nameText:SetText(G.Esc(name));
 		if ( kind == "elite" ) then
-			p.nameText:SetTextColor(NAME_ELITE[1], NAME_ELITE[2], NAME_ELITE[3]);
 			p.bar:SetColor(COLOR_ELITE[1], COLOR_ELITE[2], COLOR_ELITE[3]);
 		elseif ( kind == "friend" ) then
-			local nr, ng, nb = p.name:GetTextColor();
-			p.nameText:SetTextColor(nr or 0.7, ng or 1, nb or 0.7);
 			p.bar:SetColor(COLOR_FRIEND[1], COLOR_FRIEND[2], COLOR_FRIEND[3]);
 		elseif ( kind == "neutral" ) then
-			p.nameText:SetTextColor(1, 0.92, 0.5);
 			p.bar:SetColor(COLOR_NEUTRAL[1], COLOR_NEUTRAL[2], COLOR_NEUTRAL[3]);
 		else
-			p.nameText:SetTextColor(0.95, 0.95, 0.95);
 			p.bar:SetColor(COLOR_ENEMY[1], COLOR_ENEMY[2], COLOR_ENEMY[3]);
 		end
 		-- the mark left of the bar: a skull for a boss, a crown for an elite
@@ -420,7 +449,7 @@ local function Refresh(p, tname, tkind)
 	elseif ( p.enemy ) then
 		show = G.Opt("nameplates") and ( elite or not G.Opt("platesElite") );
 	else
-		show = G.Opt("platesFriend") and not ( G.Opt("platesPets") and IsPetName(p.rawName) );
+		show = G.Opt("platesFriend") and FriendShown(p.rawName);
 	end
 	if ( not show ) then
 		if ( p.shownV ) then
@@ -521,8 +550,8 @@ function G.UpdatePlates(dt)
 		return;
 	end
 	P.active = true;
-	if ( G.Opt("platesFriend") and G.Opt("platesPets") ) then
-		ReadPets();
+	if ( G.Opt("platesFriend") and not ( G.Opt("friendPets") and G.Opt("friendTotems") ) ) then
+		ReadHeroes();
 	end
 	Scan();
 	local list = P.list;
@@ -641,7 +670,10 @@ function G.PlatesReport()
 		if ( dumped < 2 and p.frame:IsShown() ) then
 			dumped = dumped + 1;
 			local kids = { p.frame:GetChildren() };
-			G.Print("  plate " .. dumped .. " " .. G.Plain(tostring(p.rawName)) .. ": hidden by us " .. tostring(p.quiet)
+			local sk, listed = SpecialKind(p.rawName or "");
+			G.Print("  plate " .. dumped .. " " .. G.Plain(tostring(p.rawName)) .. ": " .. tostring(p.cKind) .. ", API says "
+				.. ( listed and tostring(sk or "ordinary") or "nothing (no list)" ) .. ", game's level icon "
+				.. ( p.icon:IsShown() and G.Plain(tostring(p.icon:GetTexture())) or "off" ) .. ", hidden by us " .. tostring(p.quiet)
 				.. ", " .. table.getn(kids) .. " frames, " .. table.getn(p.regs) .. " regions");
 			for k = 1, table.getn(kids) do
 				local c = kids[k];
