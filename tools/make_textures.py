@@ -924,7 +924,7 @@ def plate_fill(name="plate_fill.tga", w=64, h=32):
     write_tga(name, rgba)
 
 
-# ---------------------------------------------------------------- 1.10.0: light beams (an easter egg's)
+# ---------------------------------------------------------------- 2.0.0: light beams (an easter egg's)
 def rave_beams(name="rave_beam.tga", cells=8, cell=64):
     """64 cells (8 x 8, 64 px each) of one soft white light beam that starts in the middle of the cell and goes outwards; cell k
     points k * 360 / 64 degrees clockwise from straight up. The addon turns a beam by picking the cell (this client cannot

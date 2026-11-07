@@ -176,14 +176,14 @@ This is a fan made interface for Azeroth Survivors. It is not affiliated with or
 "Guild Wars" is a trademark of ArenaNet / NCSOFT. The layout is inspired by Guild Wars 2's interface; all textures, icons and
 code here are original.
 
-## Changes in 1.10.0
+## Changes in 2.0.0
 
-- The kills / gold / cache line under the run bar is smaller and tighter, and centred under the bar as a whole: the three groups stand the same distance apart and the line has the same room to its left and to its right.
-- New options for the guardians (Map & Guardians). *Guardians on the boss bar* (on by default) lists awake guardians with the bosses at the top, as before. *Health bars on the list* (off by default) puts a short health bar with the percent under each awake guardian on the guardian list; switching it on takes the guardians off the boss bar, and each switch can be changed on its own afterwards.
 - The settings window is rebuilt as pages (Interface, Nameplates, Damage, Map & Guardians, Utility) in the style of the hero panel.
-- The amulet, rings and trinkets have no window any more and stand in a row that starts above the first skill, like the F1 - F5 skills of Guild Wars 2: the amulet a little bigger, then the rings, then the trinkets. The summons and totems stand in one centred row under the orb, between the orb and the class resource bar, which is smaller and lower now. They are called "Accessories" in the unlocked layout and can be moved and resized on their own; the new switch *Accessories* (Interface) turns them off. The border of each piece has the colour of its rarity, and the tooltip is the game's own tooltip of the item; an upgrade that gives a piece another name or rarity is followed (the border and the tooltip no longer stay as they were).
-- The health bar on the guardian list is shorter, so it stays on the screen.
-- The pages of the settings window can be clicked again (the five page buttons all went to the same page in the game).
+- The amulet, rings and trinkets have no window any more and stand in a row that starts above the first skill, like the F1 - F5 skills of Guild Wars 2: the amulet a little bigger, then the rings, then the trinkets. They are called "Accessories" in the unlocked layout and can be moved and resized on their own; the new switch *Accessories* (Interface) turns them off.
+- The border of each accessory has the colour of its rarity, and the tooltip is the game's own tooltip of the item; both follow an upgrade.
+- The summons and totems stand in one centred row under the orb, between the orb and the class resource bar, which is smaller and lower now.
+- New options for the guardians (Map & Guardians). *Guardians on the boss bar* (on by default) lists awake guardians with the bosses at the top, as before. *Health bars on the list* (off by default) puts a short health bar with the percent under each awake guardian on the guardian list; switching it on takes the guardians off the boss bar, and each switch can be changed on its own afterwards.
+- The kills / gold / cache line under the run bar is smaller and tighter, and centred under the bar as a whole.
 - The command that lists health and buffs of each friend is now `/gw2 partyinfo`.
 
 ## Changes in 1.9.2
