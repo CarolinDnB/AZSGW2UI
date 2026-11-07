@@ -155,7 +155,7 @@ impl.SetTexture = function(self, a, b, c, d)
 	assert(a == nil or type(a) == "string", "SetTexture path " .. tostring(a))
 	self.tex = a
 end
-impl.SetVertexColor = function(self, r, g, b, a) needNum("SetVertexColor", r, g, b); if a ~= nil then needNum("SetVertexColor a", a) end self.vc = { r, g, b, a or 1 } end
+impl.SetVertexColor = function(self, r, g, b, a) needNum("SetVertexColor", r, g, b); if a ~= nil then needNum("SetVertexColor a", a) end self.vc = { r, g, b, a or 1 }; self.vcCount = (self.vcCount or 0) + 1 end
 impl.SetTexCoord = function(self, ...) needNum("SetTexCoord", ...) self.tc = { ... } end
 impl.GetTexCoord = function(self) if rawget(self, "tc") then return unpack(self.tc) end end
 impl.SetBlendMode = function(self, m) assert(m == "ADD" or m == "BLEND" or m == "DISABLE" or m == "ALPHAKEY" or m == "MOD") end
@@ -273,6 +273,17 @@ impl.SetHyperlink = function(self, link)
 	lastLink = link; tipLines = { "(game tooltip)" }
 end
 impl.NumLines = function(self) return self.tipText and #self.tipText or 0 end
+lastInvTip = nil
+-- the game's tooltip of a worn item: only switched on by the tests that need it (INV_TIP)
+impl.SetInventoryItem = function(self, unit, id)
+	assert(unit == "player")
+	if not INV_TIP then error("attempt to call method 'SetInventoryItem' (a nil value)") end
+	if not worn[id] then return nil end
+	self.tipText = { (worn[id][2]:match("%[(.-)%]")) }
+	self.shown = true
+	lastInvTip = id
+	return true, false, 0
+end
 impl.GetOwner = function(self) return self.owner end
 impl.ClearLines = function(self) self.tipText = nil; if self._name == "GameTooltip" then tipLines = {} end end
 local book = { { "Frostbolt", "Rank 2" }, { "Frostbolt", "Rank 3" }, { "Blizzard", "Rank 1" } }
@@ -591,7 +602,8 @@ function AZS_ProjectWorldAnchors(reqs)
 end
 function PlaySound(n) table.insert(playedSounds, n) end
 playedFiles = {}
-function PlaySoundFile(path) table.insert(playedFiles, path) end
+local soundHandles = 0
+function PlaySoundFile(path) table.insert(playedFiles, path); soundHandles = soundHandles + 1; return true, (RETURN_HANDLES and soundHandles or nil) end
 function GetAddOnMetadata(addon, field) if addon == "AZSGW2UI" and field == "Version" then return "9.9.9-test" end end
 function GetPlayerBuff(i, filter)
 	local n = (filter == "HELPFUL") and 4 or 2
@@ -1517,10 +1529,20 @@ scenario("settings window + unlock layout", function()
 		for i, t in ipairs(f.tabs) do names[i] = t.text.text end
 		assert(names[1] == "Interface" and names[2] == "Nameplates" and names[3] == "Damage" and names[4] == "Map & Guardians" and names[5] == "Utility", "page names: " .. table.concat(names, ","))
 		for i = 1, #f.pages do assert((perPage[i] or 0) >= 1 or i == 1, "page " .. i .. " has no switch") end
-		-- the 23 switches of 1.9.2 are all still there, and the new one for the guardian bars
+		-- the 23 switches of 1.9.2 are all still there, and the new ones for the guardian bars and the accessories
 		local n = 0
 		for _ in pairs(seen) do n = n + 1 end
-		assert(n == 24, "number of switches: " .. n)
+		assert(n == 25, "number of switches: " .. n)
+		assert(seen["Accessories"], "a switch for the accessories")
+		-- every switch of a page is inside its panel and every panel inside the page (nothing hangs out of the window)
+		for _, c in ipairs(f.checks) do
+			local panel = c.parent
+			local page = panel.parent
+			local top = -panel.pts[1][5]
+			assert(top + panel:GetHeight() <= page:GetHeight(), string.format("page %d panel '%s' ends at %d, the page is %d tall", c.page, c.row.label, top + panel:GetHeight(), page:GetHeight()))
+			local cy = -c.pts[1][5]
+			assert(cy + c:GetHeight() <= panel:GetHeight(), "switch '" .. c.row.label .. "' hangs out of its panel")
+		end
 		for i, t in ipairs(f.tabs) do
 			t.scripts.OnClick()
 			for k, pg in ipairs(f.pages) do assert(pg.shown == (k == i), "only page " .. i .. " shown (page " .. k .. ")") end
@@ -1673,41 +1695,46 @@ scenario("ticks with data", function()
 	print("top title:", G.top.title.text, "| next:", G.top.next.text)
 	print("tally:", G.tally.items.kills.text.text, G.tally.items.gold.text.text, G.tally.items.chest.text.text, G.tally.items.kills.rate.text)
 	assert(G.tally.items.kills.rate.text:find("^%[%d+%.?%d*/m%]$"), "kills/min format: " .. G.tally.items.kills.rate.text)
-	-- the strip under the run clock is centred: as wide as the clock, three equal cells (the middle one dead centre), and the
-	-- content of every cell has the same room to the left and to the right, whatever the numbers
+	-- the line under the run clock is one tight, centred line: the strip has the middle of the clock above it, the three groups
+	-- stand the same gap apart, and the whole line has the same room to its left and to its right, whatever the numbers are
 	do
 		local t = G.tally
-		assert(t:GetWidth() == G.top:GetWidth(), "tally strip is as wide as the run clock: " .. t:GetWidth() .. " vs " .. G.top:GetWidth())
 		local tp = t.pts[1]
 		assert(tp[1] == "TOP" and tp[4] == 0, "tally strip is centred under the top of the screen")
-		local cell = t:GetWidth() / 3
-		local offs = {}
-		for i, k in ipairs({ "kills", "gold", "chest" }) do
-			local h = t.items[k]
-			local p = h.pts[1]
-			assert(p[1] == "CENTER" and p[4] == (i - 2) * cell, k .. " cell offset " .. tostring(p[4]))
-			assert(h:GetWidth() == cell, k .. " cell width")
-		end
-		local function room(vals)
+		assert(G.top.pts[1][1] == "TOP" and G.top.pts[1][4] == 0 and G.top.pts[1][2] == UIParent, "run clock and tally share the middle")
+		local function check(vals)
 			t.shownKey = nil
 			AZS_RUN.kills, AZS_RUN.gold, AZS_RUN.chest = vals[1], vals[2], vals[3]
 			G.UpdateTally(0.25)
-			for _, k in ipairs({ "kills", "gold", "chest" }) do
+			local keys = { "kills", "gold", "chest" }
+			local xs, ws = {}, {}
+			for i, k in ipairs(keys) do
 				local h = t.items[k]
-				local w = 18 + h.text:GetStringWidth()
-				if h.rate then w = w + 5 + h.rate:GetStringWidth() end
-				local left = h.icon.pts[1][4]
-				local right = cell - left - w
-				assert(math.abs(left - right) <= 1, string.format("%s content not centred: left %.1f right %.1f (%s)", k, left, right, h.text.text))
-				assert(left >= 0, k .. " content wider than its cell")
+				local p = h.pts[1]
+				assert(p[1] == "LEFT" and p[2] == t, k .. " group hangs off the strip")
+				xs[i], ws[i] = p[4], h:GetWidth()
+				local w = 12 + 4 + h.text:GetStringWidth()
+				if h.rate then w = w + 4 + h.rate:GetStringWidth() end
+				assert(math.abs(ws[i] - w) <= 0.5, string.format("%s group width %.1f vs content %.1f", k, ws[i], w))
 			end
+			local gap1, gap2 = xs[2] - (xs[1] + ws[1]), xs[3] - (xs[2] + ws[2])
+			assert(gap1 == 22 and gap2 == 22, string.format("gaps %s / %s (%s)", gap1, gap2, t.items.kills.text.text))
+			local left = xs[1]
+			local right = t:GetWidth() - (xs[3] + ws[3])
+			assert(math.abs(left - right) <= 1, string.format("line not centred: left %.1f right %.1f", left, right))
+			assert(left >= 0, "line wider than the strip: " .. left)
 		end
 		local k0, g0, c0 = AZS_RUN.kills, AZS_RUN.gold, AZS_RUN.chest
-		room({ 0, 0, 25 })
-		room({ 7, 12345, 250 })
-		room({ 1234, 987654321, 12 })
-		room({ 123456, 5, 1000000 })
-		room({ k0, g0, c0 })
+		check({ 0, 0, 25 })
+		check({ 301, 356, 31 })
+		check({ 7, 12345, 250 })
+		check({ 1234, 987654321, 12 })
+		check({ 123456, 5, 1000000 })
+		check({ k0, g0, c0 })
+		-- the second look a moment later changes nothing (the group stays where it is)
+		local before = t.items.kills.pts[1][4]
+		G.UpdateTally(0.25); G.UpdateTally(0.25); G.UpdateTally(0.25)
+		assert(t.items.kills.pts[1][4] == before, "relayout moved the line")
 	end
 	local ravg, rrecent = G.KillRate()
 	print("kill rate avg/recent:", ravg, rrecent)
@@ -2900,7 +2927,24 @@ scenario("jewelry row", function()
 	assert(G.jewSlots[2]:GetWidth() == G.jewSlots[5]:GetWidth() and G.jewSlots[2]:GetWidth() > 25, "rings and trinkets have one size")
 	assert(a:GetWidth() <= G.jewSlots[2]:GetWidth() * 1.4, "only slightly bigger")
 	local p1, p2, p5 = lastPoint(a), lastPoint(G.jewSlots[2]), lastPoint(G.jewSlots[5])
-	assert(p1[2] == G.charBtn and p1[1] == "BOTTOMLEFT" and p1[3] == "BOTTOMRIGHT", "the row starts right of the Character button")
+	assert(p1[2] == G.accessories and p1[1] == "BOTTOMLEFT" and p1[3] == "BOTTOMLEFT", "the row starts at the Accessories box")
+	-- the box stands above the left three skills (1 - 3), a little over the racial, and can be moved and resized on its own
+	do
+		local acc = G.accessories
+		local ap = acc.pts[1]
+		assert(ap[1] == "BOTTOMLEFT" and ap[2] == G.slots[1] and ap[3] == "TOPLEFT" and ap[5] > 0, "above the first skill")
+		assert(ap[4] < 0 and ap[4] >= -60, "starts at the racial's edge: " .. tostring(ap[4]))
+		local m = G.MovableByKey("accessories")
+		assert(m and m.label == "Accessories" and m.frame == acc, "movable, called Accessories")
+		assert(G.groupOf[G.jewSlots[1]] == "accessories" and G.groupOf[G.jewSlots[6]] == "accessories", "the pieces scale with their box")
+		assert(acc:GetWidth() >= 38 + 7 + 5 * 31 + 4 * 3 - 1, "the box holds all six pieces")
+		-- the whole row stays clear of the orb: its right end is left of the orb's left rim
+		-- (6 pieces: the amulet and five more)
+		assert(acc:GetWidth() <= 3 * 52 + 2 * 3 + 40 + 8 + 4, "not wider than racial + left three: " .. acc:GetWidth())
+	end
+	-- the summons and totems stand above the row while it is in its place
+	local stp = lastPoint(G.status[1])
+	assert(stp[2] == G.slots[1] and stp[5] >= 10 + 38, "status rows above the accessories: " .. tostring(stp[5]))
 	assert(p2[2] == a and p5[2] == G.jewSlots[4] and p2[1] == "BOTTOMLEFT" and p2[3] == "BOTTOMRIGHT", "bottoms line up, each next to the one before")
 	assert(p2[4] > p5[4], "a little more room after the amulet than between the others")
 	for i = 1, 5 do assert(G.jewSlots[i].shown, "slot " .. i .. " shown") ; assert(G.jewSlots[i].icon.tex, "icon " .. i) end
@@ -2910,6 +2954,56 @@ scenario("jewelry row", function()
 	G.jewSlots[2].scripts.OnEnter()
 	assert(tipLines[1] == "Ring One" and tipLines[2] == "Ring", "tooltip: name and kind: " .. table.concat(tipLines, " | "))
 	G.jewSlots[2].scripts.OnLeave()
+	assert(G.jewSlots[2].bev.tint == "steel" and G.jewSlots[2].slotId == nil, "pieces that are not worn keep the steel border")
+	-- worn: the border has the colour of the rarity and the tooltip is the game's own tooltip of the item
+	do
+		local saved = { worn[2], worn[11], worn[12], worn[13], worn[14] }
+		worn[2] = { "Interface\\Icons\\INV_Jewelry_Necklace_01", "|cffa335ee|Hitem:21:0:0:0|h[Amulet of Doom]|h|r" }
+		worn[11] = { "Interface\\Icons\\INV_Jewelry_Ring_01", "|cff0070dd|Hitem:22:0:0:0|h[Ring One]|h|r" }
+		worn[12] = { "Interface\\Icons\\INV_Jewelry_Ring_02", "|cff1eff00|Hitem:23:0:0:0|h[Ring Two]|h|r" }
+		worn[13] = { "Interface\\Icons\\INV_Misc_Gear_01", "|cffff8000|Hitem:24:0:0:0|h[Trinket One]|h|r" }
+		worn[14] = { "Interface\\Icons\\INV_Misc_Gear_02", "|cffffffff|Hitem:25:0:0:0|h[Trinket Two]|h|r" }
+		runTicks(3, 1.1)
+		local function left(i) return G.jewSlots[i].bev.edges.left.vc end
+		local function near(c, r, g, b) return math.abs(c[1] - r) < 0.02 and math.abs(c[2] - g) < 0.02 and math.abs(c[3] - b) < 0.02 end
+		assert(G.jewSlots[1].slotId == 2 and G.jewSlots[2].slotId == 11 and G.jewSlots[3].slotId == 12 and G.jewSlots[4].slotId == 13 and G.jewSlots[5].slotId == 14,
+			"every piece found its place: " .. table.concat({ tostring(G.jewSlots[1].slotId), tostring(G.jewSlots[2].slotId), tostring(G.jewSlots[3].slotId), tostring(G.jewSlots[4].slotId), tostring(G.jewSlots[5].slotId) }, ","))
+		assert(near(left(1), 0xa3 / 255, 0x35 / 255, 0xee / 255), "epic amulet: purple border")
+		assert(near(left(2), 0, 0x70 / 255, 0xdd / 255), "rare ring: blue border")
+		assert(near(left(3), 0x1e / 255, 1, 0), "uncommon ring: green border")
+		assert(near(left(4), 1, 0x80 / 255, 0), "legendary trinket: orange border")
+		assert(near(left(5), 0.74, 0.74, 0.78), "common trinket: quiet steel, not glaring white")
+		local top, bottom = G.jewSlots[2].bev.edges.top.vc, G.jewSlots[2].bev.edges.bottom.vc
+		assert(top[3] > left(2)[3] and bottom[3] < left(2)[3], "light on top, dark below")
+		-- the colour is only sent to the game when it changes
+		local calls = G.jewSlots[2].bev.edges.left.vcCount
+		runTicks(3, 1.1)
+		assert(G.jewSlots[2].bev.edges.left.vcCount == calls, "the colour is not sent again")
+		-- the tooltip is the game's own
+		INV_TIP = true
+		for i, slot in ipairs({ 2, 11, 12, 13, 14 }) do
+			lastInvTip = nil
+			tipLines = {}
+			G.jewSlots[i].scripts.OnEnter()
+			assert(lastInvTip == slot, "piece " .. i .. " shows inventory slot " .. slot .. ": " .. tostring(lastInvTip))
+			G.jewSlots[i].scripts.OnLeave()
+		end
+		INV_TIP = nil
+		-- a client where that call fails: the name in its colour and the kind
+		tipLines = {}
+		G.jewSlots[2].scripts.OnEnter()
+		assert(tipLines[1] == "Ring One" and tipLines[2] == "Ring", "fallback tooltip: " .. table.concat(tipLines, " | "))
+		G.jewSlots[2].scripts.OnLeave()
+		-- two rings of the same name take one place each
+		worn[12] = { "Interface\\Icons\\INV_Jewelry_Ring_01", "|cffff8000|Hitem:26:0:0:0|h[Ring One]|h|r" }
+		G.jewSlots[3].data.name = "Ring One"
+		runTicks(3, 1.1)
+		assert(G.jewSlots[2].slotId == 11 and G.jewSlots[3].slotId == 12, "same name, two places: " .. tostring(G.jewSlots[2].slotId) .. "," .. tostring(G.jewSlots[3].slotId))
+		worn[2], worn[11], worn[12], worn[13], worn[14] = saved[1], saved[2], saved[3], saved[4], saved[5]
+		runTicks(3, 1.1)
+		assert(G.jewSlots[2].bev.tint == "steel", "no longer worn: steel again")
+	end
+	assert(G.jewSlots[1].scripts.OnEnter and G.jewSlots[1].strata == "HIGH", "above the game's own HUD frames, so the mouse reaches the pieces")
 	-- hiding with the run and coming back
 	phase = nil; runTicks(4, 1.1)
 	for i = 1, 5 do assert(not G.jewSlots[i].shown, "jewelry hidden outside a run") end
@@ -2924,7 +3018,44 @@ scenario("jewelry row", function()
 	metaRev = "jewel2"
 	runTicks(4, 1.1)
 	assert(G.jewSlots[1].data.name == "Ring of Doom" and G.jewSlots[1]:GetWidth() == G.jewSlots[2]:GetWidth() and not G.jewSlots[2].shown, "one ring: normal size, first")
-	assert(lastPoint(G.jewSlots[1])[2] == G.charBtn, "alone it is next to the Character button")
+	assert(lastPoint(G.jewSlots[1])[2] == G.accessories, "alone it is at the start of the Accessories box")
+	-- not worn but known by its item id: the colour comes from the item, the tooltip from its link
+	do
+		local old2 = AZS_GetMeterLoadout
+		AZS_GetMeterLoadout = function(q)
+			local lo = old2(q)
+			lo.sources["item:100"].itemId = 777
+			return lo
+		end
+		GetItemInfo = function(id) return "Ring of Doom", "|cffff8000|Hitem:" .. id .. ":0:0:0|h[Ring of Doom]|h|r", 5 end
+		linkTip["item:777"] = { "Ring of Doom" }
+		metaRev = metaRev .. "y"
+		runTicks(3, 1.1)
+		local j = G.jewSlots[1]
+		assert(j.slotId == nil and j.qr and math.abs(j.qg - 0.5) < 0.02, "colour from the item id")
+		lastLink = nil
+		j.scripts.OnEnter()
+		assert(lastLink == "item:777", "tooltip from the link: " .. tostring(lastLink))
+		j.scripts.OnLeave()
+		GetItemInfo = nil; linkTip["item:777"] = nil
+		AZS_GetMeterLoadout = old2
+		metaRev = metaRev .. "z"
+		runTicks(3, 1.1)
+	end
+	-- moved away by the player: the summons drop back to just above the skills
+	AZSGW2DB.pos = AZSGW2DB.pos or {}
+	AZSGW2DB.pos.accessories = { "CENTER", "CENTER", 300, 200 }
+	runTicks(4, 1.1)
+	assert(lastPoint(G.status[1])[5] == 10, "summons back above the skills once the accessories were moved: " .. tostring(lastPoint(G.status[1])[5]))
+	AZSGW2DB.pos.accessories = nil
+	runTicks(4, 1.1)
+	assert(lastPoint(G.status[1])[5] >= 10 + 38, "summons above the accessories again")
+	-- the switch
+	G.SetOpt("accessories", false); runTicks(4, 1.1)
+	for i = 1, 6 do assert(not G.jewSlots[i].shown, "accessories off: slot " .. i) end
+	assert(lastPoint(G.status[1])[5] == 10, "accessories off: summons just above the skills")
+	G.SetOpt("accessories", true); runTicks(4, 1.1)
+	assert(G.jewSlots[1].shown, "accessories back on")
 	AZS_GetMeterLoadout = old
 	metaRev = oldRev
 	runTicks(4, 1.1)
@@ -3022,7 +3153,7 @@ scenario("secret party mode", function()
 	SlashCmdList["AZSGW2"]("party off")
 	-- damaged saved variables fall back to the built-in song
 	now = now + 200
-	for _, bad in ipairs({ { file = "a\\b", len = 10 }, { file = string.rep("a", 100), len = 10 }, { file = "ok", len = 0 }, { file = "ok", len = 0 / 0 }, { file = 5, len = 10 }, "x" }) do
+	for _, bad in ipairs({ { file = "a\\b", len = 10 }, { file = string.rep("a", 100), len = 10 }, { file = "ok", len = 1 }, { file = "ok", len = -5 }, { file = "ok", len = 0 / 0 }, { file = 5, len = 10 }, "x" }) do
 		AZSGW2DB.partySong = bad
 		local c2 = #playedFiles
 		SlashCmdList["AZSGW2"]("party on"); runTicks(5, 1 / 30)
@@ -3034,6 +3165,72 @@ scenario("secret party mode", function()
 	SlashCmdList["AZSGW2"]("party song")
 	now = now + 100
 	runTicks(2, 0.1)
+	-- stopping the song: the sound effects are switched off for a moment (a playing sound is dropped) and put back
+	do
+		cvars["Sound_EnableSFX"] = "1"
+		now = now + 300
+		local c0 = #playedFiles
+		SlashCmdList["AZSGW2"]("party on"); runTicks(10, 1 / 30)
+		assert(#playedFiles == c0 + 1, "a song is playing")
+		n0 = #chatLines
+		SlashCmdList["AZSGW2"]("party off")
+		assert(cvars["Sound_EnableSFX"] == "0", "the sound effects are off the moment the party ends")
+		assert(AZSGW2DB.sfxMuted == "Sound_EnableSFX", "remembered in case the game ends now")
+		local said = table.concat(chatLines, "\n", n0 + 1)
+		assert(said:find("party's over") and not said:find("ends by itself"), "it does not say the song has to play out: " .. said)
+		runTicks(2, 0.1)
+		assert(cvars["Sound_EnableSFX"] == "0", "still off after a fifth of a second")
+		runTicks(12, 0.1)
+		assert(cvars["Sound_EnableSFX"] == "1" and AZSGW2DB.sfxMuted == nil, "back on after half a second")
+		assert(G.raveUpdater.interval >= 0.5, "idle again")
+		-- on again within the half second: the effects are back first and the new song is heard
+		SlashCmdList["AZSGW2"]("party on"); runTicks(5, 1 / 30)
+		SlashCmdList["AZSGW2"]("party off")
+		assert(cvars["Sound_EnableSFX"] == "0")
+		local c1 = #playedFiles
+		SlashCmdList["AZSGW2"]("party on")
+		assert(cvars["Sound_EnableSFX"] == "1", "a quick restart puts the effects back at once")
+		runTicks(5, 1 / 30)
+		assert(#playedFiles == c1 + 1, "and the new song starts: " .. (#playedFiles - c1))
+		SlashCmdList["AZSGW2"]("party off"); runTicks(15, 0.1)
+		assert(cvars["Sound_EnableSFX"] == "1")
+		-- the game ended in the middle of the switch: the next start of the addon puts it back
+		cvars["Sound_EnableSFX"] = "0"; AZSGW2DB.sfxMuted = "Sound_EnableSFX"; G.rave.checked = false; G.rave.sfx = nil
+		runTicks(2, 0.5)
+		assert(cvars["Sound_EnableSFX"] == "1" and AZSGW2DB.sfxMuted == nil, "put back after a crash")
+		-- a silly remembered value is never written to the game
+		AZSGW2DB.sfxMuted = "Sound_Volume"; G.rave.checked = false; cvars["Sound_Volume"] = "0.5"
+		runTicks(2, 0.5)
+		assert(cvars["Sound_Volume"] == "0.5" and AZSGW2DB.sfxMuted == nil, "an unknown name is dropped, not set")
+		-- sound effects the player had switched off are left alone
+		cvars["Sound_EnableSFX"] = "0"
+		SlashCmdList["AZSGW2"]("party on"); runTicks(5, 1 / 30); SlashCmdList["AZSGW2"]("party off"); runTicks(15, 0.1)
+		assert(cvars["Sound_EnableSFX"] == "0" and AZSGW2DB.sfxMuted == nil, "effects the player switched off stay off")
+		cvars["Sound_EnableSFX"] = nil
+		-- the other name of the same switch
+		cvars["MasterSoundEffects"] = "1"
+		SlashCmdList["AZSGW2"]("party on"); runTicks(5, 1 / 30); SlashCmdList["AZSGW2"]("party off")
+		assert(cvars["MasterSoundEffects"] == "0"); runTicks(15, 0.1); assert(cvars["MasterSoundEffects"] == "1")
+		cvars["MasterSoundEffects"] = nil
+		-- a client with a handle and StopSound
+		RETURN_HANDLES = true
+		local stopped = {}
+		StopSound = function(h) table.insert(stopped, h) end
+		SlashCmdList["AZSGW2"]("party on"); runTicks(5, 1 / 30); SlashCmdList["AZSGW2"]("party off")
+		assert(#stopped == 1 and stopped[1] == soundHandles, "StopSound got the handle of the song")
+		StopSound, RETURN_HANDLES = nil, nil
+		-- a song of the player's own, with no length: played once, never repeated
+		SlashCmdList["AZSGW2"]("party song caramell")
+		assert(AZSGW2DB.partySong.file == "caramell" and AZSGW2DB.partySong.len == 0, "no length: played once")
+		now = now + 400
+		local c2 = #playedFiles
+		SlashCmdList["AZSGW2"]("party on"); runTicks(2400, 1 / 30)
+		assert(#playedFiles == c2 + 1 and playedFiles[#playedFiles]:find("caramell.mp3", 1, true), "played once, 80 seconds, no repeat: " .. (#playedFiles - c2))
+		SlashCmdList["AZSGW2"]("party off")
+		SlashCmdList["AZSGW2"]("party song caramell 214"); assert(AZSGW2DB.partySong.len == 214)
+		SlashCmdList["AZSGW2"]("party song default")
+		now = now + 400
+	end
 	-- the old diagnostic lives on under its new name
 	n0 = #chatLines
 	SlashCmdList["AZSGW2"]("partyinfo")

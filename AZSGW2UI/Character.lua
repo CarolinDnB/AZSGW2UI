@@ -48,6 +48,8 @@ local function LinkColor(link)
 	return r, g, b;
 end
 
+G.LinkColor = LinkColor;
+
 local function Safe(fn, a, b, c)
 	if ( fn ) then
 		local ok, r1, r2 = pcall(fn, a, b, c);

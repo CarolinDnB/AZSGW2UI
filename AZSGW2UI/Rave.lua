@@ -44,8 +44,8 @@ local function Song()
 	local s = AZSGW2DB and AZSGW2DB.partySong;
 	if ( type(s) == "table" and type(s.file) == "string" and type(s.len) == "number" and s.len == s.len
 		and string.len(s.file) > 0 and string.len(s.file) <= 40 and not string.find(s.file, "[^%w_%-]")
-		and s.len >= 3 and s.len <= 1800 ) then
-		return s.file, s.len, true;
+		and ( s.len == 0 or ( s.len >= 3 and s.len <= 1800 ) ) ) then
+		return s.file, s.len, true;                       -- a length of 0: the song is played once and not repeated
 	end
 	return SONG.file, SONG.len, false;
 end
@@ -171,20 +171,85 @@ local function PlayLoop(R)
 	local file, len = Song();
 	local now = GetTime();
 	if ( R.songEnds and now < R.songEnds ) then
-		R.musicAt = R.t + ( R.songEnds - now );        -- the last round is still playing (a sound cannot be stopped): wait for its end
+		R.musicAt = R.t + ( R.songEnds - now );        -- the last round is still playing: wait for its end
 		return;
 	end
 	if ( PlaySoundFile ) then
-		pcall(PlaySoundFile, SOUNDS .. file .. ".mp3");
+		local ok, _, handle = pcall(PlaySoundFile, SOUNDS .. file .. ".mp3");
+		R.handle = ok and handle or nil;               -- newer clients hand back a handle that StopSound takes
 	end
-	R.songEnds = now + len;
-	R.musicAt = R.t + len;
+	if ( len > 0 ) then
+		R.songEnds = now + len;
+		R.musicAt = R.t + len;
+	else
+		R.songEnds = nil;                              -- a song of unknown length: played once
+		R.musicAt = nil;
+	end
+end
+
+-- PlaySoundFile has no stop. What may cut a song short, whichever of it this client has: StopSound with the handle (newer
+-- clients), and a short switch of the sound effects off and on again (the sound system drops what it is playing when its
+-- effects are turned off). The switch is put back about half a second later; if the game ends in between, the next start of
+-- this addon puts it back (the saved variable remembers). Returns whether anything was tried.
+local SFXVARS = { "Sound_EnableSFX", "MasterSoundEffects" };
+
+local function CutSong(R)
+	local tried = false;
+	if ( R.handle and StopSound ) then
+		pcall(StopSound, R.handle);
+		tried = true;
+	end
+	R.handle = nil;
+	if ( GetCVar and SetCVar and not R.sfx ) then
+		for i = 1, table.getn(SFXVARS) do
+			local name = SFXVARS[i];
+			local ok, v = pcall(GetCVar, name);
+			if ( ok and tostring(v) == "1" ) then
+				if ( pcall(SetCVar, name, "0") ) then
+					R.sfx = { name = name, at = GetTime() };
+					AZSGW2DB.sfxMuted = name;
+					tried = true;
+					if ( G.raveUpdater ) then
+						G.raveUpdater.interval = 0.1;
+					end
+				end
+				break;
+			end
+		end
+	end
+	if ( tried ) then
+		R.songEnds = nil;                                  -- it may be cut: a new start need not wait for its end
+	end
+	R.musicAt = nil;
+	return tried;
+end
+
+-- puts the sound effects back (after the short switch, or after a game that ended in the middle of it)
+local function RestoreSfx(R)
+	local name = R.sfx and R.sfx.name or AZSGW2DB.sfxMuted;
+	R.sfx = nil;
+	AZSGW2DB.sfxMuted = nil;
+	if ( type(name) == "string" and ( name == SFXVARS[1] or name == SFXVARS[2] ) and SetCVar ) then
+		pcall(SetCVar, name, "1");
+	end
+	if ( G.raveUpdater and not R.on ) then
+		G.raveUpdater.interval = IDLE;
+	end
 end
 
 ------------------------------------------------------------------------ the show
 
 function G.UpdateRave(dt)
 	local R = G.rave;
+	if ( not R.checked ) then
+		R.checked = true;
+		if ( AZSGW2DB and AZSGW2DB.sfxMuted ) then
+			RestoreSfx(R);                                 -- the game ended while the sound effects were switched off
+		end
+	end
+	if ( R.sfx and GetTime() - R.sfx.at >= 0.5 ) then
+		RestoreSfx(R);
+	end
 	if ( not R.on ) then
 		return;
 	end
@@ -309,6 +374,9 @@ function G.PartyStart()
 			return;
 		end
 	end
+	if ( R.sfx ) then
+		RestoreSfx(R);                                     -- started again within half a second of the end: sound effects back first
+	end
 	R.on = true;
 	R.t, R.n, R.kick = 0, 0, 0;
 	R.musicAt = 0;
@@ -332,10 +400,11 @@ function G.PartyStop(quiet)
 	if ( G.raveUpdater ) then
 		G.raveUpdater.interval = IDLE;
 	end
+	local left = R.songEnds and math.ceil(R.songEnds - GetTime()) or 0;
+	local tried = CutSong(R);
 	if ( not quiet ) then
-		local left = R.songEnds and math.ceil(R.songEnds - GetTime()) or 0;
-		if ( left > 1 ) then
-			G.Print("party's over. (The game cannot stop a song once it plays: this one ends by itself in " .. left .. " seconds.)");
+		if ( left > 1 and not tried ) then
+			G.Print("party's over. (This game cannot stop a song once it plays: this one ends by itself in " .. left .. " seconds.)");
 		else
 			G.Print("party's over.");
 		end
@@ -355,20 +424,24 @@ function G.PartyCommand(rest)
 				AZSGW2DB.partySong = nil;
 			end
 			local file, len, custom = Song();
-			G.Print("party song: " .. ( custom and ( file .. ".mp3, " .. len .. " seconds" ) or "the one that comes with the addon" )
-				.. ". Put your own mp3 into the AZSGW2UI/Sounds folder and use /gw2 party song <name without .mp3> <length in seconds>.");
+			G.Print("party song: " .. ( custom and ( file .. ".mp3, " .. ( len > 0 and ( len .. " seconds" ) or "played once" ) ) or "the one that comes with the addon" )
+				.. ". Put your own mp3 into the AZSGW2UI/Sounds folder and use /gw2 party song <name without .mp3> [length in seconds, to repeat it].");
 			return;
 		end
-		local _, _, name, secs = string.find(args, "^([%w_%-]+)%s+([%d%.]+)$");
-		secs = tonumber(secs);
-		if ( not name or string.len(name) > 40 or not secs or secs < 3 or secs > 1800 ) then
-			G.Print("usage: /gw2 party song <file name without .mp3> <length in seconds>  |  /gw2 party song default");
+		local _, _, name, secs = string.find(args, "^([%w_%-]+)%s*([%d%.]*)$");
+		if ( secs == "" ) then
+			secs = 0;                                         -- no length: the song is played once
+		else
+			secs = tonumber(secs);
+		end
+		if ( not name or string.len(name) > 40 or not secs or ( secs ~= 0 and ( secs < 3 or secs > 1800 ) ) ) then
+			G.Print("usage: /gw2 party song <file name without .mp3> [length in seconds]  |  /gw2 party song default");
 			return;
 		end
 		AZSGW2DB.partySong = { file = name, len = secs };
 		G.rave.songEnds = nil;
 		G.rave.musicAt = G.rave.on and G.rave.t or nil;      -- a running party plays it from the next moment
-		G.Print("party song: " .. name .. ".mp3, " .. secs .. " seconds.");
+		G.Print("party song: " .. name .. ".mp3, " .. ( secs > 0 and ( secs .. " seconds." ) or "played once." ));
 		return;
 	end
 	if ( word == "off" ) then

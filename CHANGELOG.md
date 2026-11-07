@@ -4,14 +4,17 @@
 
 **New**
 - **Health bars of guardians on the guardian list.** *Health bars on the list* (Map & Guardians): an awake guardian shows its health bar with the percent right under its own row on the guardian list, in the same flat style as the boss bar. It is one or the other: with the option on, the guardian is not on the boss bar at the top any more; with it off the list shows no bars and the boss bar works as before. Bosses stay on the boss bar either way. (The debuff icons of a guardian are only shown on the boss bar.)
+- **Accessories.** Your amulet, rings and trinkets stand above the left three skills in a box of their own, called *Accessories* in the unlocked layout (move it, resize it). *Accessories* in the settings (Interface) turns the row off. The summons and totems stand above it while it is in its place and drop back to the skills when you move it away.
 - **The settings window is rebuilt** as pages in the style of the hero panel: a list on the left (Interface, Nameplates, Damage, Map & Guardians, Utility) and framed groups of switches on the right (Frames, Layout, Enemies, Friends, Damage numbers, Meter, Minimap, Guardians, Co-op, Skills, Game). Same options as before, plus the new one above; a switch keeps its saved value.
 
 **Changed**
-- **The gear next to the spellbook and character buttons** (amulet, rings, trinkets) lost its window. They stand on their own like the F1 - F5 skills of Guild Wars 2: the amulet, the most important piece, a little bigger, a little more room after it, then the rings, then the trinkets. Only the pieces you wear are drawn.
+- **The amulet, rings and trinkets lost their window.** They stand on their own like the F1 - F5 skills of Guild Wars 2: the amulet, the most important piece, a little bigger, a little more room after it, then the rings, then the trinkets. Only the pieces you wear are drawn.
+- **Rarity and tooltips on the accessories.** The border of a piece has the colour of its rarity (grey-steel for common, green, blue, purple, orange), taken from the item the hero wears in that slot (found by its name; failing that by the item id). The tooltip is the game's own tooltip of that item (stats and text); when the game cannot give it, the piece shows its name in its colour and its kind. The pieces are now above the game's own HUD frames, so the mouse reaches them.
 - **The command that lists what the client says about each friend (for the barrier) is now `/gw2 partyinfo`.**
 
 **Fixed**
-- **The stats row under the run bar sat to the left of the bar's middle.** The three cells (kills, gold, cache) are the same width now and each is centred in its third, so the row is even under the bar. It no longer shifts when a number gets longer.
+- **The kills / gold / cache row under the run bar was not even** (it sat to the left, with a wide gap on one side and none on the other). It is one smaller, tighter line now: the three groups stand 22 px apart and the line as a whole is centred under the bar, whatever the numbers are.
+- **The page buttons of the new settings window did nothing** (in the game's Lua 5.0 the five buttons shared one loop variable, so none of them went to its own page). They have their own copy now. `tools/lint_loops.py` looks for that mistake in the addon; it finds no other place.
 
 ## 1.9.2
 

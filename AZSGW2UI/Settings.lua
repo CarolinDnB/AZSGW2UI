@@ -5,7 +5,7 @@
 
 local G = AZSGW2;
 
-local W, H = 620, 332;
+local W, H = 620, 360;
 local NAVW = 142;
 local TOP = 48;                     -- under the title line
 local PAGEX = 166;                  -- left edge of the page area
@@ -60,6 +60,7 @@ local PAGES = {
 			Opt("Target bar", "A wide bar with the name and the health of your target, at the top of the screen.", "target"),
 			Opt("Party frames", "Health, barrier and buffs of your friends in a co-op game.", "party"),
 			Opt("GW2 character panel", "The hero panel opens in place of the game's character window. The game's own window still opens for its other tabs.", "charPanel"),
+			Opt("Accessories", "Your amulet, rings and trinkets in a row above the left skills, like the F1 - F5 skills of Guild Wars 2. Move them with Unlock layout.", "accessories"),
 		} },
 		{ title = "Layout", layout = true },
 	} },
@@ -377,8 +378,9 @@ function G.BuildSettings()
 	f.tabs = {};
 	for i = 1, table.getn(PAGES) do
 		local def = PAGES[i];
-		f.tabs[i] = NewTab(nav, def.name, i, function()
-			G.SettingsPage(i);
+		local index = i;            -- a copy of its own: Lua 5.0 (the game) shares the loop variable between the closures
+		f.tabs[i] = NewTab(nav, def.name, index, function()
+			G.SettingsPage(index);
 		end);
 		local page = CreateFrame("Frame", nil, f);
 		page:SetPoint("TOPLEFT", f, "TOPLEFT", PAGEX, -TOP);

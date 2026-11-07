@@ -292,16 +292,20 @@ end
 
 ------------------------------------------------------------------------ tally (kills / gold / cache price)
 
--- The strip is as wide as the run clock above it and split into three equal cells; what stands in a cell (icon, number,
--- and for the kills the rate) is centred in its cell. So the middle cell, the gold, is exactly under the middle of the clock,
--- and the two outer ones are the same distance to either side, whatever the numbers are.
-local TALLYW = BARW + 40;
-local CELLW = TALLYW / 3;
+-- One tight line under the run clock: kills (with the rate), gold, cache price. The three groups stand a fixed gap apart and
+-- the line as a whole is centred on the strip, which has the same middle as the run clock above it. Only the first group's
+-- position comes from a measured width; the parts inside a group hang off each other by anchors.
+local TALLYW = 360;          -- the strip behind the line (the run bar above it is 360 wide)
+local TICON = 12;            -- icon size
+local TICONGAP = 4;          -- icon -> number
+local TRATEGAP = 4;          -- number -> [18/m]
+local TSEP = 22;             -- between two groups
+local TALLYKEYS = { "kills", "gold", "chest" };
 
 function G.BuildTally()
 	local f = CreateFrame("Frame", "AZSGW2Tally", UIParent);
 	f:SetWidth(TALLYW);
-	f:SetHeight(20);
+	f:SetHeight(18);
 	f:SetPoint("TOP", UIParent, "TOP", 0, -70);
 	G.Movable(f, "tally", "Kills / gold", nil, nil, false);
 	f:SetFrameStrata("MEDIUM");
@@ -321,22 +325,22 @@ function G.BuildTally()
 	for i = 1, 3 do
 		local d = defs[i];
 		local h = CreateFrame("Frame", nil, f);
-		h:SetWidth(CELLW);
-		h:SetHeight(18);
-		h:SetPoint("CENTER", f, "CENTER", ( i - 2 ) * CELLW, 0);
+		h:SetWidth(TICON + TICONGAP + 30);
+		h:SetHeight(16);
+		h:SetPoint("LEFT", f, "LEFT", 0, 0);
 		local ic = h:CreateTexture(nil, "ARTWORK");
 		ic:SetTexture(d.icon);
-		ic:SetWidth(14);
-		ic:SetHeight(14);
+		ic:SetWidth(TICON);
+		ic:SetHeight(TICON);
 		ic:SetTexCoord(0.07, 0.93, 0.07, 0.93);
-		ic:SetPoint("LEFT", h, "LEFT", ( CELLW - 18 ) / 2, 0);
+		ic:SetPoint("LEFT", h, "LEFT", 0, 0);
 		h.icon = ic;
-		h.text = G.Text(h, 12, "LEFT");
-		h.text:SetPoint("LEFT", ic, "RIGHT", 4, 0);
+		h.text = G.Text(h, 11, "LEFT");
+		h.text:SetPoint("LEFT", ic, "RIGHT", TICONGAP, 0);
 		if ( d.key == "kills" ) then
 			-- kills per minute, [18/m], to the right of the total
-			h.rate = G.Text(h, 10, "LEFT");
-			h.rate:SetPoint("LEFT", h.text, "RIGHT", 5, -1);
+			h.rate = G.Text(h, 9, "LEFT");
+			h.rate:SetPoint("LEFT", h.text, "RIGHT", TRATEGAP, -1);
 			h.rate:SetTextColor(0.78, 0.72, 0.52);
 		end
 		local key = d.key;
@@ -352,27 +356,34 @@ function G.BuildTally()
 	end
 end
 
--- centres each cell's content (icon 14 + gap 4 + number [+ gap 5 + rate]) in the cell; only when the text changed
+-- sizes the three groups to their text and puts the whole line in the middle of the strip (only moves what changed)
 function G.LayoutTally()
 	local f = G.tally;
 	if ( not f ) then
 		return;
 	end
-	for _, k in ipairs({ "kills", "gold", "chest" }) do
-		local h = f.items[k];
-		local w = 18 + h.text:GetStringWidth();
+	local widths = {};
+	local total = 2 * TSEP;
+	for i = 1, 3 do
+		local h = f.items[TALLYKEYS[i]];
+		local w = TICON + TICONGAP + h.text:GetStringWidth();
 		if ( h.rate ) then
-			w = w + 5 + h.rate:GetStringWidth();
+			w = w + TRATEGAP + h.rate:GetStringWidth();
 		end
-		local left = math.floor(( CELLW - w ) / 2 + 0.5);
-		if ( left < 0 ) then
-			left = 0;
+		w = math.floor(w + 0.5);
+		widths[i] = w;
+		total = total + w;
+	end
+	local x = math.floor(( f:GetWidth() - total ) / 2 + 0.5);
+	for i = 1, 3 do
+		local h = f.items[TALLYKEYS[i]];
+		if ( h.lx ~= x or h.lw ~= widths[i] ) then
+			h.lx, h.lw = x, widths[i];
+			h:SetWidth(widths[i]);
+			h:ClearAllPoints();
+			h:SetPoint("LEFT", f, "LEFT", x, 0);
 		end
-		if ( h.left ~= left ) then
-			h.left = left;
-			h.icon:ClearAllPoints();
-			h.icon:SetPoint("LEFT", h, "LEFT", left, 0);
-		end
+		x = x + widths[i] + TSEP;
 	end
 end
 
@@ -438,6 +449,10 @@ function G.UpdateTally(dt)
 		f.items.kills.rate:SetText(rtext);
 		f.items.gold.text:SetText(gtext);
 		f.items.chest.text:SetText(ctext);
+		G.LayoutTally();
+		f.relayout = 2;                 -- and again a moment later, in case the client lays the strings out a frame late
+	elseif ( f.relayout and f.relayout > 0 ) then
+		f.relayout = f.relayout - 1;
 		G.LayoutTally();
 	end
 end

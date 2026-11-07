@@ -1,9 +1,9 @@
 -- AZS GW2 UI: Skills.lua
 -- Six display-only skill slots (the spells cast themselves in Azeroth Survivors): three on each side of
 -- the orb, big and tight, each with a round rank chip. The racial sits left of the left three; Talents and
--- Character are two small buttons stacked right of the right three. The jewelry row (no plate: the amulet a little
--- bigger, then the rings, then the trinkets, like the F1 - F5 skills of GW2) and the status row (summons, totems)
--- sit around them. Own art; the layout is inspired by GW2_UI.
+-- Character are two small buttons stacked right of the right three. The accessories (no plate: the amulet a little
+-- bigger, then the rings, then the trinkets, like the F1 - F5 skills of GW2) stand in a row above the left three skills and
+-- can be moved on their own; the status row (summons, totems) sits above them. Own art; the layout is inspired by GW2_UI.
 
 local G = AZSGW2;
 
@@ -19,6 +19,8 @@ local AMULET = 38;     -- the jewelry row: the amulet is the most important piec
 local JEWEL = 31;      -- rings and trinkets
 local JEWGAP = 3;
 local AMULETGAP = 7;   -- a little more room after the amulet
+local ACCY = 10;          -- the accessories stand this far above the left three skills (room for the targets chips)
+local ACCW = AMULET + AMULETGAP + 5 * JEWEL + 4 * JEWGAP;   -- all six pieces: 212 px, a little wider than the racial + left three
 local AURAS = 10;      -- buffs / debuffs shown, one row each
 local AURASIZE = 26;
 local STATUS = 12;     -- summons and totems: two rows of six
@@ -94,7 +96,7 @@ function G.RefreshLoadout()
 			if ( src.icon and src.icon.status == "ready" ) then
 				icon = src.icon.path;
 			end
-			table.insert(jew, { name = src.name or "?", icon = icon, category = j.category });
+			table.insert(jew, { name = src.name or "?", icon = icon, category = j.category, itemId = tonumber(src.itemId) });
 		end
 	end
 	G.jewelry = jew;
@@ -117,6 +119,31 @@ local function Bevel(b)
 	shade:SetPoint("TOPLEFT", b, "TOPLEFT", 3, -3);
 	shade:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -3, 3);
 	G.Edges(shade, 0, 0, 0, 0.55, 1, "ARTWORK");
+	return bev;
+end
+
+-- the bevel in the colour of an item's rarity (light on top and left, dark below and right), or the steel again (r = nil)
+local function TintBevel(bev, r, g, b)
+	local e = bev.edges;
+	if ( not e ) then
+		return;
+	end
+	local key = r and string.format("%.2f %.2f %.2f", r, g, b) or "steel";
+	if ( bev.tint == key ) then
+		return;
+	end
+	bev.tint = key;
+	if ( not r ) then
+		e.top:SetVertexColor(0.78, 0.78, 0.82, 1);
+		e.left:SetVertexColor(0.64, 0.64, 0.68, 1);
+		e.bottom:SetVertexColor(0.27, 0.27, 0.31, 1);
+		e.right:SetVertexColor(0.33, 0.33, 0.37, 1);
+		return;
+	end
+	e.top:SetVertexColor(r + ( 1 - r ) * 0.30, g + ( 1 - g ) * 0.30, b + ( 1 - b ) * 0.30, 1);
+	e.left:SetVertexColor(r, g, b, 1);
+	e.right:SetVertexColor(r * 0.72, g * 0.72, b * 0.72, 1);
+	e.bottom:SetVertexColor(r * 0.55, g * 0.55, b * 0.55, 1);
 end
 
 local function NewSlot(size, hasCooldown, ranked)
@@ -935,27 +962,51 @@ function G.BuildSkills()
 	G.barBox = box;
 	G.Movable(orb, "orb", "Skill bar", box, box);
 
-	-- jewelry: no plate, just the pieces in a row right of the Character button, like the F1 - F5 skills of GW2: the amulet
-	-- first and a little bigger, then the rings, then the trinkets (UpdateJewelry puts them in that order)
+	-- accessories: no plate, the pieces in a row above the left three skills like the F1 - F5 skills of GW2: the amulet
+	-- first and a little bigger, then the rings, then the trinkets (UpdateJewelry puts them in that order). The row hangs
+	-- off a box of its own, "Accessories", that can be moved and resized in the unlocked layout.
+	local acc = CreateFrame("Frame", "AZSGW2Accessories", UIParent);
+	acc:SetWidth(ACCW);
+	acc:SetHeight(AMULET);
+	acc:SetFrameStrata("HIGH");
+	acc:SetPoint("BOTTOMLEFT", G.slots[1], "TOPLEFT", -( RACIAL + OUTER ), ACCY);
+	G.Movable(acc, "accessories", "Accessories", nil, nil, false);
+	G.Register(acc);
+	G.accessories = acc;
 	G.jewSlots = {};
 	for i = 1, 6 do
 		local j = CreateFrame("Frame", nil, UIParent);
 		j.tipTag = "jewelry";
 		j:SetWidth(JEWEL);
 		j:SetHeight(JEWEL);
-		j:SetFrameStrata("MEDIUM");
-		j:SetPoint("BOTTOMLEFT", ch, "BOTTOMRIGHT", OUTER, 0);
+		j:SetFrameStrata("HIGH");                        -- above the game's own HUD frames, like the skills: the mouse reaches us
+		j:SetPoint("BOTTOMLEFT", acc, "BOTTOMLEFT", 0, 0);
 		local t = j:CreateTexture(nil, "BACKGROUND");
 		t:SetPoint("TOPLEFT", j, "TOPLEFT", 3, -3);
 		t:SetPoint("BOTTOMRIGHT", j, "BOTTOMRIGHT", -3, 3);
 		t:SetTexCoord(0.07, 0.93, 0.07, 0.93);
 		j.icon = t;
-		Bevel(j);
+		j.bev = Bevel(j);
 		G.Tooltip(j, function(tt)
-			if ( j.data ) then
-				tt:AddLine(j.data.name, G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
-				if ( j.data.category ) then
-					tt:AddLine(Pretty(tostring(j.data.category)), 0.7, 0.7, 0.7);
+			local d = j.data;
+			if ( not d ) then
+				return;
+			end
+			-- the game's own tooltip of the item (stats, rarity, text) when the piece can be found among what is worn, or
+			-- by its item id; otherwise its name in its colour and its kind
+			local shown = false;
+			if ( j.slotId and tt.SetInventoryItem ) then
+				local ok, has = pcall(tt.SetInventoryItem, tt, "player", j.slotId);
+				shown = ok and has and true or false;
+			end
+			if ( not shown and d.itemId and tt.SetHyperlink ) then
+				local ok = pcall(tt.SetHyperlink, tt, "item:" .. d.itemId);
+				shown = ok and tt.NumLines and tt:NumLines() > 0 and true or false;
+			end
+			if ( not shown ) then
+				tt:AddLine(d.name, j.qr or G.GOLDLIGHT[1], j.qg or G.GOLDLIGHT[2], j.qb or G.GOLDLIGHT[3]);
+				if ( d.category ) then
+					tt:AddLine(Pretty(tostring(d.category)), 0.7, 0.7, 0.7);
 				end
 			end
 		end, "ANCHOR_TOP");
@@ -1644,6 +1695,46 @@ local function JewelWeight(category)
 	return 4;
 end
 
+-- The piece's place among what the hero wears (neck 2, rings 11 and 12, trinkets 13 and 14), found by its name: the link
+-- of that item has its rarity colour, and the game can show its own tooltip. With no place the piece is looked up by its
+-- item id; with neither it keeps the steel border. `used`: the places already given to a piece of the same name.
+local JEWPLACES = { { 2 }, { 11, 12 }, { 13, 14 }, { 2, 11, 12, 13, 14 } };
+
+local function JewelRarity(j, d, used)
+	local r, g, b = nil, nil, nil;
+	local slot = nil;
+	if ( GetInventoryItemLink ) then
+		local places = JEWPLACES[JewelWeight(d.category)] or JEWPLACES[4];
+		local want = string.lower(tostring(d.name));
+		for i = 1, table.getn(places) do
+			local id = places[i];
+			if ( not used[id] ) then
+				local ok, link = pcall(GetInventoryItemLink, "player", id);
+				if ( ok and type(link) == "string" ) then
+					local _, _, name = string.find(link, "%[(.-)%]");
+					if ( name and string.lower(name) == want ) then
+						slot = id;
+						used[id] = true;
+						if ( G.LinkColor ) then
+							r, g, b = G.LinkColor(link);
+						end
+						break;
+					end
+				end
+			end
+		end
+	end
+	if ( not r and d.itemId and GetItemInfo ) then
+		local ok, _, link = pcall(GetItemInfo, d.itemId);
+		if ( ok and link and G.LinkColor ) then
+			r, g, b = G.LinkColor(link);
+		end
+	end
+	j.slotId = slot;
+	j.qr, j.qg, j.qb = r, g, b;
+	TintBevel(j.bev, r, g, b);
+end
+
 function G.UpdateJewelry(dt)
 	if ( not G.jewSlots ) then
 		return;
@@ -1661,12 +1752,16 @@ function G.UpdateJewelry(dt)
 		return a.i < b.i;
 	end);
 	local prev = nil;
+	local on = G.Opt("accessories");
+	local count = 0;
+	local used = {};
 	for i = 1, 6 do
 		local j = G.jewSlots[i];
 		local e = sorted[i];
-		if ( e and G.shown ) then
+		if ( e and G.shown and on ) then
 			local d = e.d;
 			j.data = d;
+			JewelRarity(j, d, used);
 			local icon = d.icon or G.QUESTION;
 			if ( j.cIcon ~= icon ) then
 				j.cIcon = icon;
@@ -1688,16 +1783,29 @@ function G.UpdateJewelry(dt)
 				if ( before ) then
 					j:SetPoint("BOTTOMLEFT", before, "BOTTOMRIGHT", after, 0);
 				else
-					j:SetPoint("BOTTOMLEFT", G.charBtn, "BOTTOMRIGHT", OUTER, 0);
+					j:SetPoint("BOTTOMLEFT", G.accessories, "BOTTOMLEFT", 0, 0);
 				end
 			end
 			G.Vis(j, true);
+			count = count + 1;
 			prev = { slot = j, w = e.w };
 		else
 			j.data = nil;
+			j.slotId = nil;
 			j.curPrev = nil;
 			G.Vis(j, false);
 		end
+	end
+	-- the summons and totems stand above the accessories while those are in their own place; once the player has moved
+	-- the accessories away (or there are none) they drop back to just above the skills
+	local lift = 0;
+	if ( count > 0 and not G.HasPos("accessories") ) then
+		lift = AMULET + 6;
+	end
+	if ( G.status and G.status[1] and G.statusLift ~= lift ) then
+		G.statusLift = lift;
+		G.status[1]:ClearAllPoints();
+		G.status[1]:SetPoint("BOTTOMLEFT", G.slots[1], "TOPLEFT", 0, 10 + lift);
 	end
 end
 

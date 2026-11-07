@@ -15,6 +15,7 @@ and to regenerate its art without the game.
       make_textures.py    draws every texture in AZSGW2UI/Textures (pure Python + numpy + Pillow)
       make_sounds.py      writes the one sound file in AZSGW2UI/Sounds from scratch (numpy + scipy, ffmpeg for the mp3)
       render_layout.py    turns a layout dump of the harness into a PNG preview
+      lint_loops.py       finds a closure that uses a numeric for loop variable (Lua 5.0 shares it between the closures of the loop)
     .github/workflows/release.yml   the Release workflow (Actions tab > Release > Run workflow)
     .gitattributes        line-ending rules for textures and fonts
 
@@ -26,6 +27,7 @@ to it at the top of the repo and stays out of the zip without any extra setting.
     cd tools
     python3 run_lua.py harness.lua            # the generated textures ("custom" art)
     STOCK=1 python3 run_lua.py harness.lua    # plain colours ("stock" art)
+    python3 lint_loops.py                     # closures that use a for loop variable (the game's Lua 5.0 shares it: copy it to a local)
 
 or, if you have a `lua5.4` binary:  `lua5.4 harness.lua`.  `run_lua.py` needs `liblua5.4.so.0`
 (Debian / Ubuntu: `apt install liblua5.4-0`). The harness loads the files in the order of `AZSGW2UI.toc`, feeds them a
