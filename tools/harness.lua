@@ -1616,6 +1616,8 @@ scenario("per-frame size in unlock mode", function()
 	do
 		local p1, p2 = lastPoint(G.status[1]), lastPoint(G.status[2])
 		assert(p1[1] == "TOPLEFT" and p1[2] == G.orb and p1[3] == "BOTTOM" and p1[5] < 0, "the row hangs under the orb")
+		assert(-p1[5] >= 7, "the row stands clear of the orb's rim (it reaches 5 px below the frame): " .. tostring(-p1[5]))
+		assert(G.status[1]:GetWidth() == 16 and G.status[1]:GetHeight() == 16, "16 px icons")
 		assert(p2[1] == "LEFT" and p2[2] == G.status[1] and p2[3] == "RIGHT", "the next one is to the right")
 		assert(G.status[12].pts[1][2] == G.status[11], "one row of twelve")
 		local function centred(n)
@@ -1646,7 +1648,7 @@ scenario("per-frame size in unlock mode", function()
 		local barTop = -pr[5]
 		assert(pr[2] == G.orb and pr[3] == "BOTTOM", "the resource bar hangs under the orb")
 		assert(rowBottom <= barTop, "the row ends above the resource bar: " .. rowBottom .. " vs " .. barTop)
-		assert(G.resource:GetWidth() == 150 and G.resource:GetHeight() == 9, "a smaller resource bar")
+		assert(G.resource:GetWidth() == 150 and G.resource:GetHeight() == 8, "a smaller resource bar")
 		assert(barTop + G.resource:GetHeight() <= 34 - 1, "and low on the screen: it ends at least 1 px above the edge")
 		assert(G.status[1].strata == "HIGH", "above the game's HUD frames: the mouse reaches the summons")
 	end
@@ -1732,8 +1734,16 @@ scenario("ticks with data", function()
 	print("jewelry 1:", G.jewSlots[1].data and G.jewSlots[1].data.name)
 	print("status 1:", G.status[1].data and G.status[1].data.name, "time", G.status[1].time.text)
 	print("top title:", G.top.title.text, "| next:", G.top.next.text)
-	print("tally:", G.tally.items.kills.text.text, G.tally.items.gold.text.text, G.tally.items.chest.text.text, G.tally.items.kills.rate.text)
-	assert(G.tally.items.kills.rate.text:find("^%[%d+%.?%d*/m%]$"), "kills/min format: " .. G.tally.items.kills.rate.text)
+	print("tally:", G.tally.items.kills.text.text, G.tally.items.gold.text.text, G.tally.items.chest.text.text)
+	-- the kills per minute are not on the line (it is the same width for all three), only in the tooltip of the kills
+	assert(G.tally.items.kills.rate == nil, "no rate on the line")
+	do
+		tipLines = {}
+		G.tally.items.kills.scripts.OnEnter()
+		local said = table.concat(tipLines, " | ")
+		assert(said:find("Run average: [%d%.]+ kills per minute") and said:find("Last minute: [%d%.]+ kills per minute"), "the tooltip has the rates: " .. said)
+		G.tally.items.kills.scripts.OnLeave()
+	end
 	-- the line under the run clock is one tight, centred line: the strip has the middle of the clock above it, the three groups
 	-- stand the same gap apart, and the whole line has the same room to its left and to its right, whatever the numbers are
 	do
@@ -1753,7 +1763,6 @@ scenario("ticks with data", function()
 				assert(p[1] == "LEFT" and p[2] == t, k .. " group hangs off the strip")
 				xs[i], ws[i] = p[4], h:GetWidth()
 				local w = 12 + 4 + h.text:GetStringWidth()
-				if h.rate then w = w + 4 + h.rate:GetStringWidth() end
 				assert(math.abs(ws[i] - w) <= 0.5, string.format("%s group width %.1f vs content %.1f", k, ws[i], w))
 			end
 			local gap1, gap2 = xs[2] - (xs[1] + ws[1]), xs[3] - (xs[2] + ws[2])
@@ -1970,7 +1979,8 @@ scenario("layout dump (busy: many summons / totems / timers)", function()
 	assert(shownStatus == 10, "status row: expected 7 summons + 3 totems, got " .. shownStatus)
 	dumpLayout(OUTDIR .. "/layout_busy.txt")
 	-- The strip under the orb belongs to the orb, the summons row and the resource bar (and the faint backdrop of the skill bar):
-	-- nothing else may be placed there. A new part that lands in it shows up here.
+	-- nothing else may be placed there. A new part that lands in it shows up here. (The round 18 px frames are the rank chips of the skills, which
+	-- hang a little below their slots; the 16 px ones are the summons.)
 	do
 		local fh = io.open(OUTDIR .. "/layout_busy.txt")
 		local strangers = {}
@@ -1981,7 +1991,7 @@ scenario("layout dump (busy: many summons / totems / timers)", function()
 				-- the screen is 1600 x 900, the orb stands in the middle: under its frame (y < 34) and the row (y < 31), 500 px either side
 				if w < 1500 and x < 1100 and x + w > 500 and y < 34 and y + h > 0 then
 					local ok = name == "orb" or name == "resource" or name == "wingL" or name == "wingR" or name == "barBox" or name:find("^status%d+$")
-						or ( name == "-" and ( ( w == 18 and h == 18 ) or ( w == 150 and h == 9 ) or ( w == 112 and h == 112 ) ) )
+						or ( name == "-" and ( ( w == 16 and h == 16 ) or ( w == 18 and h == 18 ) or ( w == 150 and h == 8 ) or ( w == 112 and h == 112 ) ) )
 					if not ok then table.insert(strangers, string.format("%s %.0f,%.0f %.0fx%.0f", name, x, y, w, h)) end
 				end
 			end

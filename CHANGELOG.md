@@ -11,7 +11,8 @@ A bigger update: a new settings window, a new place for the accessories, the sum
 - **Two separate switches for the health of guardians** (Map & Guardians). *Guardians on the boss bar* (on by default): awake guardians are listed with the bosses at the top, as they always were. *Health bars on the list* (off by default): an awake guardian shows a short health bar with the percent right under its own row on the guardian list, in the same flat style as the boss bar. Switching the bars on takes the guardians off the boss bar (so they are not shown twice); switch *Guardians on the boss bar* on again to have both. Bosses stay on the boss bar either way. (The debuff icons of a guardian are only shown on the boss bar.)
 
 **Changed**
-- **Summons and totems moved.** They stand in one centred row under the orb, between the orb and the class resource bar (soul shards, combo points, rage). The resource bar is smaller (150 x 9 px instead of 176 x 11) and sits lower to make room; the summon icons are 18 px.
+- **Summons and totems moved.** They stand in one centred row under the orb, between the orb and the class resource bar (soul shards, combo points, rage), clear of the orb's rim. The resource bar is smaller (150 x 8 px instead of 176 x 11) and sits lower to make room; the summon icons are 16 px.
+- **The kills per minute left the line under the run bar** (`[18/m]`), so kills, gold and cache are the same kind of thing and the line is even. The tooltip of the kills still says the run average and the last minute.
 - **The command that lists what the client says about each friend (for the barrier) is now `/gw2 partyinfo`.**
 
 **Fixed**

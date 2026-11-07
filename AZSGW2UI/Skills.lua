@@ -26,9 +26,9 @@ local ACCW = 3 * SLOT + 2 * GAP;
 local AURAS = 10;      -- buffs / debuffs shown, one row each
 local AURASIZE = 26;
 local STATUS = 12;     -- summons and totems: one row, centred under the orb, between the orb and the class resource bar
-local STATUSSIZE = 18;
+local STATUSSIZE = 16;
 local STATUSGAP = 2;
-local STATUSTOP = 3;   -- this far under the orb's frame (its rim reaches a little further); the resource bar is under the row
+local STATUSTOP = 7;   -- this far under the orb's frame: the orb's rim reaches 5 px below it, so the row stands clear of the rim; the resource bar is under the row
 
 G.slots = {};
 G.abilityInfo = {};

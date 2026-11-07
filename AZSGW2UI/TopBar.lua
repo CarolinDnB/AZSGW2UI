@@ -292,13 +292,12 @@ end
 
 ------------------------------------------------------------------------ tally (kills / gold / cache price)
 
--- One tight line under the run clock: kills (with the rate), gold, cache price. The three groups stand a fixed gap apart and
+-- One tight line under the run clock: kills, gold, cache price (the kills per minute are in the tooltip of the kills). The three groups stand a fixed gap apart and
 -- the line as a whole is centred on the strip, which has the same middle as the run clock above it. Only the first group's
 -- position comes from a measured width; the parts inside a group hang off each other by anchors.
 local TALLYW = 360;          -- the strip behind the line (the run bar above it is 360 wide)
 local TICON = 12;            -- icon size
 local TICONGAP = 4;          -- icon -> number
-local TRATEGAP = 4;          -- number -> [18/m]
 local TSEP = 22;             -- between two groups
 local TALLYKEYS = { "kills", "gold", "chest" };
 
@@ -337,12 +336,6 @@ function G.BuildTally()
 		h.icon = ic;
 		h.text = G.Text(h, 11, "LEFT");
 		h.text:SetPoint("LEFT", ic, "RIGHT", TICONGAP, 0);
-		if ( d.key == "kills" ) then
-			-- kills per minute, [18/m], to the right of the total
-			h.rate = G.Text(h, 9, "LEFT");
-			h.rate:SetPoint("LEFT", h.text, "RIGHT", TRATEGAP, -1);
-			h.rate:SetTextColor(0.78, 0.72, 0.52);
-		end
 		local key = d.key;
 		G.Tooltip(h, function(tt)
 			tt:AddLine(d.tip, G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
@@ -366,11 +359,7 @@ function G.LayoutTally()
 	local total = 2 * TSEP;
 	for i = 1, 3 do
 		local h = f.items[TALLYKEYS[i]];
-		local w = TICON + TICONGAP + h.text:GetStringWidth();
-		if ( h.rate ) then
-			w = w + TRATEGAP + h.rate:GetStringWidth();
-		end
-		w = math.floor(w + 0.5);
+		local w = math.floor(TICON + TICONGAP + h.text:GetStringWidth() + 0.5);
 		widths[i] = w;
 		total = total + w;
 	end
@@ -438,15 +427,13 @@ function G.UpdateTally(dt)
 	while ( table.getn(s) > 1 and t - s[2].t >= 60 ) do
 		table.remove(s, 1);       -- keep the newest sample that is still 60 s or older as the start
 	end
-	local avg = G.KillRate();
-	local ktext, rtext = G.Comma(run.kills), "[" .. G.RateText(avg) .. "/m]";
+	local ktext = G.Comma(run.kills);
 	local gtext, ctext = G.Comma(run.gold), G.Comma(run.chest);
 	-- text and layout are touched only when something changed (this runs four times a second)
-	local key = ktext .. "|" .. rtext .. "|" .. gtext .. "|" .. ctext;
+	local key = ktext .. "|" .. gtext .. "|" .. ctext;
 	if ( f.shownKey ~= key ) then
 		f.shownKey = key;
 		f.items.kills.text:SetText(ktext);
-		f.items.kills.rate:SetText(rtext);
 		f.items.gold.text:SetText(gtext);
 		f.items.chest.text:SetText(ctext);
 		G.LayoutTally();
