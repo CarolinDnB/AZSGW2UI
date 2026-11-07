@@ -83,7 +83,7 @@ Unlocked, every frame gets a gold box with its name and size: drag it to move it
     /gw2 plates pets on | off         friendly plates for pets and summons (default on)
     /gw2 plates hidetotems on | off   hide the friendly plates of totems (default off: totems get one)
     /gw2 targets [on | off]           the number of targets on the skills; alone: what each skill's tooltip says
-    /gw2 marks [on | off]             mark your co-op allies with the game's raid icons when you join a party (default on); alone: who has which
+    /gw2 marks [on | off]             mark your co-op party (you too) with the game's raid icons when you join (default on); alone: who has which
     /gw2 plates debug                 what the nameplate frames look like, if no plate is recognised
     /gw2 messages on | off            the game's own centre-screen messages (off by default)
     /gw2 art custom | stock           generated textures / plain colours (reloads)
@@ -153,12 +153,12 @@ Unlocked, every frame gets a gold box with its name and size: drag it to move it
   until you point at it again. It follows upgrades and cards within a few seconds. `/gw2 targets` prints the lines each skill's
   tooltip has and which one the number came from, so a missing number can be explained. A skill whose tooltip has no number shows nothing. Switch it
   off with "Max targets, on the skills" in the settings.
-- Marks: when you join a co-op game, every ally gets one of the game's raid icons (star, circle, diamond, triangle, moon) so the
+- Marks: when you join a co-op game, every hero of the party, you included, gets one of the game's raid icons (star, circle, diamond, triangle, moon) so the
   allies can be told apart in the swarm. The icon is a hero's place in the party sorted by name, you included: every player who
   runs this addon gives the same icon to the same hero. It is done when the party forms, when a hero comes or goes and when a new run
-  begins; a mark that is already on an ally is left alone, and one you take off stays off until the party changes or a new run
+  begins; a mark that is already on a hero is left alone, and one you take off stays off until the party changes or a new run
   begins. Whether a mark can be set depends on the game (in a party, perhaps only the leader): `/gw2 marks` says who should have
-  which icon and who has it. `/gw2 marks off` (or the setting *Mark allies in co-op games*) stops it.
+  which icon and who has it. `/gw2 marks off` (or the setting *Mark the party in co-op games*) stops it.
 - Two health bars on a nameplate: the game's own bar became visible again next to ours (most likely when it gives a plate to a
   new enemy). The addon now looks at every plate again and hides it whenever it comes back; if it still happens,
   `/gw2 plates debug` lists the parts of two plates with their alpha, please send that.
@@ -178,7 +178,7 @@ code here are original.
 
 ## Changes in 1.9.2
 
-- Co-op: allies are marked with the game's raid icons when you join a game (this replaces the marks on bosses and guardians). `/gw2 marks` says who has which.
+- Co-op: the party, you included, is marked with the game's raid icons when you join a game (this replaces the marks on bosses and guardians). `/gw2 marks` says who has which.
 - The "Ally down" alert, the party frame and the guardian list no longer take the clicks meant for the world (a right click in the middle of the screen while a friend was down did nothing).
 
 ## Changes in 1.9.1

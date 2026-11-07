@@ -316,7 +316,7 @@ local function Help()
 	G.Print("/gw2 bindings [text] : list key binding names");
 	G.Print("/gw2 plates on|off | elite on|off | friends on|off | pets on|off | hidetotems on|off | debug : GW2 nameplates (off by default)");
 	G.Print("/gw2 targets [on|off] : the number of targets on the skills; without on / off it shows what each skill's tooltip says");
-	G.Print("/gw2 marks on|off : mark your co-op allies with the game's raid icons when you join a party (/gw2 marks says who has which)");
+	G.Print("/gw2 marks on|off : mark your co-op party (you too) with the game's raid icons when you join (/gw2 marks says who has which)");
 	G.Print("/gw2 messages on|off : the game's own centre-screen messages (off by default)");
 	G.Print("/gw2 dmg all | crits | off | ticks on | ticks off : damage numbers");
 	G.Print("/gw2 char [on|off] : open the character panel / use it instead of the game's window");
@@ -772,7 +772,7 @@ function G.Slash(msg)
 		end
 		G.SetOpt("markAllies", rest == "on");
 		G.RefreshSettings();
-		G.Print("marking allies " .. rest);
+		G.Print("marking the party " .. rest);
 	elseif ( cmd == "messages" ) then
 		if ( rest ~= "on" and rest ~= "off" ) then
 			G.Print("messages are " .. ( AZSGW2DB.messages and "on" or "off" ) .. ". Use /gw2 messages on or /gw2 messages off.");

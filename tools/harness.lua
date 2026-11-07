@@ -1338,7 +1338,7 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	print("nameplate repairs, orange elites, pets ok")
 end)
 
-scenario("allies: marked with the game's raid icons when you join a co-op game", function()
+scenario("party: marked with the game's raid icons (you too) when you join a co-op game", function()
 	local setCalls, marked = {}, {}
 	SetRaidTargetIcon = function(u, i) table.insert(setCalls, u .. "=" .. i); marked[u] = i end
 	GetRaidTargetIndex = function(u) return marked[u] end
@@ -1348,10 +1348,13 @@ scenario("allies: marked with the game's raid icons when you join a co-op game",
 	-- you (Aelara) and Carolin, Ghost, Zaynor: sorted, the icons go star, circle, diamond, triangle, moon
 	runTicks(30, 0.1)
 	table.sort(setCalls)
-	assert(table.concat(setCalls, ",") == "party1=4,party2=2,party3=3", "marks: " .. table.concat(setCalls, ","))
+	assert(table.concat(setCalls, ",") == "party1=4,party2=2,party3=3,player=1", "marks: " .. table.concat(setCalls, ","))   -- you too: first by name, the star
 	setCalls = {}; runTicks(200, 0.1)
 	assert(#setCalls == 0, "marked again with nothing changed: " .. table.concat(setCalls, ","))
-	-- a mark that is taken off stays off while nothing changes
+	-- a mark that is taken off stays off while nothing changes (yours too)
+	marked.player = nil; runTicks(60, 0.1)
+	assert(#setCalls == 0, "your own mark that was taken off was put back")
+	marked.player = 1
 	marked.party1 = nil; runTicks(60, 0.1)
 	assert(#setCalls == 0, "a mark that was taken off was put back")
 	-- a hero leaves: the places move up (Aelara, Carolin, Zaynor), the one that is missing a mark gets it
@@ -1367,11 +1370,15 @@ scenario("allies: marked with the game's raid icons when you join a co-op game",
 	runTicks(30, 0.1)
 	assert(marked.party2 == 7, "somebody else's mark was changed")
 	assert(#setCalls == 1 and setCalls[1] == "party3=3", "the hero that came back: " .. table.concat(setCalls, ","))
-	-- a new run marks again whoever has lost a mark (the heroes are new)
-	marked.party2 = nil; marked.party3 = nil; setCalls = {}
+	-- a new run marks again whoever has lost a mark (the heroes are new), you too
+	marked.party2 = nil; marked.party3 = nil; marked.player = nil; setCalls = {}
 	AZS_RUN.run = "run-2"; runTicks(30, 0.1)
 	table.sort(setCalls)
-	assert(table.concat(setCalls, ",") == "party2=2,party3=3", "a new run: " .. table.concat(setCalls, ","))
+	assert(table.concat(setCalls, ",") == "party2=2,party3=3,player=1", "a new run: " .. table.concat(setCalls, ","))
+	-- a mark somebody else put on you is left alone too
+	marked.player = 6; setCalls = {}; AZS_RUN.run = "run-2b"; runTicks(30, 0.1)
+	assert(marked.player == 6 and #setCalls == 0, "your mark was changed: " .. table.concat(setCalls, ","))
+	marked.player = 1
 	-- the option: off marks nothing, on again marks at once
 	G.SetOpt("markAllies", false)
 	marked.party1, marked.party2, marked.party3 = nil, nil, nil; setCalls = {}
@@ -1383,25 +1390,25 @@ scenario("allies: marked with the game's raid icons when you join a co-op game",
 	assert(#setCalls == 3, "marking did not come back: " .. table.concat(setCalls, ","))
 	-- out of a party: nothing, and the next party is marked
 	GetNumPartyMembers = function() return 0 end
-	marked.party1, marked.party2, marked.party3 = nil, nil, nil; setCalls = {}
+	marked.party1, marked.party2, marked.party3, marked.player = nil, nil, nil, nil; setCalls = {}
 	runTicks(30, 0.1)
 	assert(#setCalls == 0, "marked out of a party")
 	SlashCmdList["AZSGW2"]("marks")
 	GetNumPartyMembers = function() return 3 end
 	runTicks(30, 0.1)
-	assert(#setCalls == 3, "a new party was not marked: " .. table.concat(setCalls, ","))
+	assert(#setCalls == 4, "a new party was not marked: " .. table.concat(setCalls, ","))
 	SlashCmdList["AZSGW2"]("marks")
 	-- the game takes the mark only after a moment: it is tried again for a while
-	marked.party1, marked.party2, marked.party3 = nil, nil, nil; setCalls = {}
+	marked.party1, marked.party2, marked.party3, marked.player = nil, nil, nil, nil; setCalls = {}
 	local fails = 3
 	SetRaidTargetIcon = function(u, i) table.insert(setCalls, u .. "=" .. i); if fails > 0 then fails = fails - 1 else marked[u] = i end end
 	AZS_RUN.run = "run-4"; runTicks(100, 0.1)
-	assert(marked.party1 == 4 and marked.party2 == 2 and marked.party3 == 3, "marks never took: " .. table.concat(setCalls, ","))
+	assert(marked.party1 == 4 and marked.party2 == 2 and marked.party3 == 3 and marked.player == 1, "marks never took: " .. table.concat(setCalls, ","))
 	-- and not for ever when the game does not let us (an error is caught too)
-	marked.party1, marked.party2, marked.party3 = nil, nil, nil; setCalls = {}
+	marked.party1, marked.party2, marked.party3, marked.player = nil, nil, nil, nil; setCalls = {}
 	SetRaidTargetIcon = function(u, i) table.insert(setCalls, u .. "=" .. i); error("not allowed") end
 	AZS_RUN.run = "run-5"; runTicks(400, 0.1)
-	assert(#setCalls > 0 and #setCalls <= 3 * 16, "tries: " .. #setCalls)
+	assert(#setCalls > 0 and #setCalls <= 4 * 16, "tries: " .. #setCalls)
 	-- a client without the raid icon functions: nothing breaks
 	SetRaidTargetIcon, GetRaidTargetIndex = nil, nil
 	AZS_RUN.run = "run-6"; runTicks(30, 0.1)
@@ -1458,7 +1465,7 @@ scenario("settings window + unlock layout", function()
 	local labels = {}
 	for _, c in ipairs(f.checks) do labels[c.row.label] = true end
 	assert(labels["   only elites and guardians"] and labels["Enable friendly nameplates"] and labels["Max targets, on the skills"]
-		and labels["   show pets and summons"] and labels["   hide totems"] and labels["Mark allies in co-op games"], "settings rows missing")
+		and labels["   show pets and summons"] and labels["   hide totems"] and labels["Mark the party in co-op games"], "settings rows missing")
 	assert(f:GetHeight() <= 640, "settings window too tall: " .. f:GetHeight())
 	-- minimap switch detaches and re-attaches the game's minimap
 	for _, c in ipairs(f.checks) do if c.row.label == "GW2 minimap" then c.scripts.OnClick() end end

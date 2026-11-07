@@ -59,7 +59,7 @@ local ROWS = {
 		set = function(v) G.SetOpt("friendPets", v); end },
 	{ label = "   hide totems", get = function() return not G.Opt("friendTotems"); end,
 		set = function(v) G.SetOpt("friendTotems", not v); end },
-	{ label = "Mark allies in co-op games", get = function() return G.Opt("markAllies"); end,
+	{ label = "Mark the party in co-op games", get = function() return G.Opt("markAllies"); end,
 		set = function(v) G.SetOpt("markAllies", v); end },
 	{ label = "Max targets, on the skills", get = function() return G.Opt("hits"); end,
 		set = function(v) G.SetOpt("hits", v); end },
