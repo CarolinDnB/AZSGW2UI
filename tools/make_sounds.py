@@ -9,7 +9,7 @@ usage: make_sounds.py [out folder]                        the song that comes wi
        make_sounds.py split <song.mp3> <name> [out folder]  cut a song of your own into <name>_1.mp3 ... <name>_N.mp3
 needs ffmpeg and ffprobe with libmp3lame in the PATH.
 """
-import math, os, subprocess, sys, tempfile
+import math, os, shutil, subprocess, sys, tempfile
 import numpy as np
 from scipy import signal
 
@@ -274,6 +274,9 @@ def build():
     return mix
 
 
+GAIN = 1.2       # the pieces are 20 % louder than the song they are cut from (measured as RMS; the game's sound effect volume is the
+                 # only other knob). A limiter keeps the peaks of a song that is mastered loud from clipping, so such a song gets
+                 # more gain at the input until its level is up by that much (at most 1.8 times)
 CHUNK = 3.0      # seconds of song in one piece: the same numbers as CHUNK / FADE in AZSGW2UI/Rave.lua
 FADE = 0.05      # a piece starts this much early and is this much longer at the end; neighbours cross-fade over 2 * FADE
 
@@ -284,11 +287,40 @@ def probe(path):
     return float(out.decode().strip())
 
 
-def split_song(src, outdir, name, bitrate="128k", channels=2):
+def rms(path):
+    """RMS of a whole file (mono mix, float)"""
+    out = subprocess.check_output(["ffmpeg", "-loglevel", "error", "-i", path, "-f", "f32le", "-ac", "1", "-ar", "44100", "-"])
+    x = np.frombuffer(out, dtype="<f4")
+    return float(np.sqrt(np.mean(x.astype("float64") ** 2))) + 1e-12
+
+
+def make_louder(src, dst, gain):
+    """Writes src as a wav, `gain` times louder in RMS, with a limiter at -1 dB (the mp3 encoder overshoots a little). Returns the RMS ratio reached."""
+    base = rms(src)
+    g, ratio = gain, 1.0
+    for _ in range(6):
+        subprocess.check_call(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-vn", "-af",
+                               "volume=%.4f,alimiter=limit=0.89:attack=5:release=60:level=disabled" % g,
+                               "-ar", "44100", "-c:a", "pcm_s16le", dst])
+        ratio = rms(dst) / base
+        if ratio >= gain * 0.99 or g >= gain * 1.8:
+            break
+        g = min(g * gain / ratio, gain * 1.8)
+    return ratio
+
+
+def split_song(src, outdir, name, bitrate="128k", channels=2, gain=GAIN):
     """Cuts a song into name_1.mp3 ... name_N.mp3 (CHUNK seconds each, FADE longer at both ends; neighbours cross-fade linearly
     over 2 * FADE so that they add up to the song again). The game cannot stop a sound that plays, so the addon starts one piece after the
     other and stops starting them when asked to. Returns N."""
     os.makedirs(outdir, exist_ok=True)
+    # the whole song gets the gain and the limiter once, so that all the pieces are cut from the same signal (a limiter run on each
+    # piece would not act the same in the stretch two neighbours share)
+    tmp = tempfile.mkdtemp()
+    loud = os.path.join(tmp, "loud.wav")
+    ratio = make_louder(src, loud, gain)
+    print("level: %.2f times the song's" % ratio)
+    src = loud
     total = probe(src)
     parts = int(math.ceil(total / CHUNK - 1e-9))
     for k in range(1, parts + 1):
@@ -306,6 +338,7 @@ def split_song(src, outdir, name, bitrate="128k", channels=2):
         subprocess.check_call(["ffmpeg", "-y", "-loglevel", "error", "-ss", "%.3f" % start, "-t", "%.3f" % dur, "-i", src,
                                "-vn", "-map_metadata", "-1", "-af", ",".join(fades), "-ac", str(channels), "-ar", "44100",
                                "-codec:a", "libmp3lame", "-b:a", bitrate, "-write_xing", "0", "-id3v2_version", "0", out])
+    shutil.rmtree(tmp, ignore_errors=True)
     return parts
 
 

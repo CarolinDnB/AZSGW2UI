@@ -3,8 +3,8 @@
 -- the orb, big and tight, each with a round rank chip. The racial sits left of the left three; Talents and
 -- Character are two small buttons stacked right of the right three. The accessories (no plate: the amulet a little
 -- bigger, then the rings, then the trinkets, like the F1 - F5 skills of GW2) stand in a row above the left three skills,
--- lined up with the first one, and can be moved on their own; the status row (summons, totems) is one row under the left
--- skills, next to the resource bar. Own art; the layout is inspired by GW2_UI.
+-- lined up with the first one, and can be moved on their own; the status row (summons, totems) is one centred row under
+-- the orb, between the orb and the class resource bar. Own art; the layout is inspired by GW2_UI.
 
 local G = AZSGW2;
 
@@ -25,10 +25,10 @@ local ACCY = 10;       -- the accessories stand this far above the left three sk
 local ACCW = 3 * SLOT + 2 * GAP;
 local AURAS = 10;      -- buffs / debuffs shown, one row each
 local AURASIZE = 26;
-local STATUS = 12;     -- summons and totems: one row under the left skills, growing to the left
-local STATUSSIZE = 24;
-local STATUSX = 32;    -- the first one ends this far left of the third skill's right edge: 6 px clear of the resource bar under the orb (176 wide)
-local STATUSY = 9;     -- under the skills' rank chips
+local STATUS = 12;     -- summons and totems: one row, centred under the orb, between the orb and the class resource bar
+local STATUSSIZE = 18;
+local STATUSGAP = 2;
+local STATUSTOP = 3;   -- this far under the orb's frame (its rim reaches a little further); the resource bar is under the row
 
 G.slots = {};
 G.abilityInfo = {};
@@ -1114,8 +1114,8 @@ function G.BuildSkills()
 	BuildAuraRow(G.buffs, "BOTTOMLEFT", G.slots[4], "TOPLEFT", 6, 12);
 	BuildAuraRow(G.debuffs, "BOTTOMLEFT", G.buffs[1], "TOPLEFT", 0, 6);
 
-	-- status row under the left three skills: summons and totems, one row that grows to the left. The first one is next to
-	-- the resource bar (under the orb), the others follow to the left, so a long row never reaches the orb
+	-- status row under the orb: summons and totems in one row, centred (UpdateStatus puts the first one where the row's
+	-- width says), between the orb and the class resource bar (soul shards and the like), which is smaller and lower
 	G.status = {};
 	for i = 1, STATUS do
 		local s = CreateFrame("Frame", nil, UIParent);
@@ -1124,9 +1124,9 @@ function G.BuildSkills()
 		s:SetHeight(STATUSSIZE);
 		s:SetFrameStrata("HIGH");
 		if ( i == 1 ) then
-			s:SetPoint("TOPRIGHT", G.slots[3], "BOTTOMRIGHT", -STATUSX, -STATUSY);
+			s:SetPoint("TOPLEFT", orb, "BOTTOM", 0, -STATUSTOP);
 		else
-			s:SetPoint("RIGHT", G.status[i - 1], "LEFT", -2, 0);
+			s:SetPoint("LEFT", G.status[i - 1], "RIGHT", STATUSGAP, 0);
 		end
 		local t = s:CreateTexture(nil, "BACKGROUND");
 		t:SetPoint("TOPLEFT", s, "TOPLEFT", 1, -1);
@@ -1137,10 +1137,10 @@ function G.BuildSkills()
 		local tf = CreateFrame("Frame", nil, s);
 		tf:SetAllPoints(s);
 		tf:SetFrameLevel(s:GetFrameLevel() + 3);
-		s.count = G.Text(tf, 10, "RIGHT");
-		s.count:SetPoint("TOPRIGHT", s, "TOPRIGHT", -2, -2);
-		s.time = G.Text(tf, 10, "CENTER");
-		s.time:SetPoint("BOTTOM", s, "BOTTOM", 0, 2);
+		s.count = G.Text(tf, 9, "RIGHT");
+		s.count:SetPoint("TOPRIGHT", s, "TOPRIGHT", -1, -1);
+		s.time = G.Text(tf, 9, "CENTER");
+		s.time:SetPoint("BOTTOM", s, "BOTTOM", 0, 1);
 		G.Tooltip(s, function(tt)
 			local d = s.data;
 			if ( d ) then
@@ -1963,6 +1963,14 @@ function G.UpdateStatus(dt)
 		end
 	end
 
+	-- the row is centred: the first one stands half the row's width left of the orb's middle (only when the number changes)
+	local n = G.shown and table.getn(list) or 0;
+	if ( n > 0 and G.statusN ~= n ) then
+		G.statusN = n;
+		local total = n * STATUSSIZE + ( n - 1 ) * STATUSGAP;
+		G.status[1]:ClearAllPoints();
+		G.status[1]:SetPoint("TOPLEFT", G.orb, "BOTTOM", -math.floor(total / 2), -STATUSTOP);
+	end
 	for i = 1, STATUS do
 		local s = G.status[i];
 		local e = list[i];

@@ -1612,14 +1612,42 @@ scenario("per-frame size in unlock mode", function()
 	-- what hangs off which movable frame
 	assert(G.groupOf[G.slots[1]] == "orb" and G.groupOf[G.slots[6]] == "orb" and G.groupOf[G.racial] == "orb", "slots not in the skill bar group")
 	assert(G.groupOf[G.resource] == "orb" and G.groupOf[G.status[1]] == "orb", "resource / status not in the skill bar group")
-	-- summons and totems: one row under the left three skills, growing to the left, clear of the resource bar under the orb
+	-- summons and totems: one centred row under the orb, between the orb and the (smaller, lower) resource bar
 	do
 		local p1, p2 = lastPoint(G.status[1]), lastPoint(G.status[2])
-		assert(p1[1] == "TOPRIGHT" and p1[2] == G.slots[3] and p1[3] == "BOTTOMRIGHT" and p1[5] < 0, "status row starts under the third skill")
-		assert(p2[1] == "RIGHT" and p2[2] == G.status[1] and p2[3] == "LEFT", "the next one is to the left")
+		assert(p1[1] == "TOPLEFT" and p1[2] == G.orb and p1[3] == "BOTTOM" and p1[5] < 0, "the row hangs under the orb")
+		assert(p2[1] == "LEFT" and p2[2] == G.status[1] and p2[3] == "RIGHT", "the next one is to the right")
 		assert(G.status[12].pts[1][2] == G.status[11], "one row of twelve")
-		local clear = G.orb:GetWidth() / 2 + 6 + ( -p1[4] ) - G.resource:GetWidth() / 2
-		assert(clear >= 4, "the status row ends left of the resource bar: " .. clear)
+		local function centred(n)
+			local total = n * G.status[1]:GetWidth() + ( n - 1 ) * 2
+			local p = lastPoint(G.status[1])
+			assert(p[4] == -math.floor(total / 2), n .. " pieces: centred, x = " .. tostring(p[4]) .. " for a row " .. total .. " wide")
+		end
+		local shownN = 0
+		for i = 1, 12 do if G.status[i].shown then shownN = shownN + 1 end end
+		assert(shownN >= 1, "something is shown")
+		centred(shownN)
+		-- the number of pieces changes: the row stays in the middle
+		local oldG, oldT = AZS_GetSummonGroups, AZS_GetTotems
+		AZS_GetTotems = function() return {} end
+		AZS_GetSummonGroups = function() return { { key = "imp", name = "Imp", icon = "Interface\\Icons\\Spell_Shadow_SummonImp", count = 1, permanent = 1, temporary = 0, remaining = 0 } }, 1 end
+		G.UpdateStatus(1); centred(1)
+		AZS_GetSummonGroups = function()
+			local t = {}
+			for i = 1, 4 do t[i] = { key = "k" .. i, name = "Pet " .. i, icon = "Interface\\Icons\\Spell_Shadow_SummonImp", count = 1, permanent = 1, temporary = 0, remaining = 0 } end
+			return t, 4
+		end
+		G.UpdateStatus(1); centred(4)
+		AZS_GetSummonGroups, AZS_GetTotems = oldG, oldT
+		G.UpdateStatus(1); centred(shownN)
+		-- between the orb and the resource bar: under the orb, above the bar, no overlap
+		local pr = lastPoint(G.resource)
+		local rowTop, rowBottom = -p1[5], -p1[5] + G.status[1]:GetHeight()
+		local barTop = -pr[5]
+		assert(pr[2] == G.orb and pr[3] == "BOTTOM", "the resource bar hangs under the orb")
+		assert(rowBottom <= barTop, "the row ends above the resource bar: " .. rowBottom .. " vs " .. barTop)
+		assert(G.resource:GetWidth() == 150 and G.resource:GetHeight() == 9, "a smaller resource bar")
+		assert(barTop + G.resource:GetHeight() <= 34 - 1, "and low on the screen: it ends at least 1 px above the edge")
 		assert(G.status[1].strata == "HIGH", "above the game's HUD frames: the mouse reaches the summons")
 	end
 	assert(G.groupOf[G.mapButton] == "mapButton" and G.groupOf[G.target] == "target")
@@ -1941,6 +1969,26 @@ scenario("layout dump (busy: many summons / totems / timers)", function()
 	end
 	assert(shownStatus == 10, "status row: expected 7 summons + 3 totems, got " .. shownStatus)
 	dumpLayout(OUTDIR .. "/layout_busy.txt")
+	-- The strip under the orb belongs to the orb, the summons row and the resource bar (and the faint backdrop of the skill bar):
+	-- nothing else may be placed there. A new part that lands in it shows up here.
+	do
+		local fh = io.open(OUTDIR .. "/layout_busy.txt")
+		local strangers = {}
+		for line in fh:lines() do
+			local kind, name, x, y, w, h = line:match("^(F)|([^|]*)|([-%d.]+)|([-%d.]+)|([-%d.]+)|([-%d.]+)")
+			if kind then
+				x, y, w, h = tonumber(x), tonumber(y), tonumber(w), tonumber(h)
+				-- the screen is 1600 x 900, the orb stands in the middle: under its frame (y < 34) and the row (y < 31), 500 px either side
+				if w < 1500 and x < 1100 and x + w > 500 and y < 34 and y + h > 0 then
+					local ok = name == "orb" or name == "resource" or name == "wingL" or name == "wingR" or name == "barBox" or name:find("^status%d+$")
+						or ( name == "-" and ( ( w == 18 and h == 18 ) or ( w == 150 and h == 9 ) or ( w == 112 and h == 112 ) ) )
+					if not ok then table.insert(strangers, string.format("%s %.0f,%.0f %.0fx%.0f", name, x, y, w, h)) end
+				end
+			end
+		end
+		fh:close()
+		assert(#strangers == 0, "something else stands under the orb: " .. table.concat(strangers, "; "))
+	end
 	AZS_GetSummonGroups, AZS_GetTotems, AZS_GetTimers = sg, tt, tm
 	runTicks(10, 0.05)
 end)

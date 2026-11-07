@@ -329,16 +329,16 @@ local PROC = {
 
 function G.BuildResource()
 	local f = CreateFrame("Frame", "AZSGW2Resource", UIParent);
-	f:SetWidth(176);
-	f:SetHeight(11);
-	f:SetPoint("TOP", G.orb, "BOTTOM", 0, -15);
+	f:SetWidth(150);
+	f:SetHeight(9);
+	f:SetPoint("TOP", G.orb, "BOTTOM", 0, -23);              -- low on the screen: the summons stand between it and the orb
 	f:SetFrameStrata("MEDIUM");
 	f:SetFrameLevel(8);
 	G.Register(f, true);
 	f:Hide();
 	G.resource = f;
 
-	f.bar = G.NewBar(f, 176, 11, 0.86, 0.18, 0.12);
+	f.bar = G.NewBar(f, 150, 9, 0.86, 0.18, 0.12);
 	f.bar:SetPoint("CENTER", f, "CENTER", 0, 0);
 
 	f.seps = {};
@@ -383,7 +383,7 @@ function G.UpdateResource(dt)
 	if ( f.curProc ~= run.proc ) then
 		f.curProc = run.proc;
 		f.bar:SetColor(info.color[1], info.color[2], info.color[3]);
-		local w = (f.bar:GetWidth() or 176) - 2;
+		local w = (f.bar:GetWidth() or 150) - 2;
 		for i = 1, 4 do
 			if ( info.seg > 0 ) then
 				f.seps[i]:ClearAllPoints();
