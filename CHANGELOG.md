@@ -1,5 +1,13 @@
 # AZS GW2 UI: Changelog
 
+## 1.9.2
+
+**Changed**
+- **Allies are marked when you join a co-op game, instead of bosses and guardians.** The boss marks did not work well, so they are gone. Now every ally gets one of the game's raid icons when the party forms, when a hero comes or goes, and when a new run begins: star, circle, diamond, triangle (and moon for a fifth hero). The icon is a hero's place in the party sorted by name, you included, so every player who runs the addon gives the same icon to the same hero and nobody takes an icon from another. A mark that is already on an ally is left alone, and one you take off is not put back until the party changes or a new run begins. If the game does not take the mark at once it is tried again for 15 seconds. *Mark allies in co-op games* in the settings, `/gw2 marks on | off`; `/gw2 marks` alone says who should have which icon and who has it. (The saved choice of the old option is not carried over: it was a different feature.)
+
+**Fixed**
+- **The "Ally down" alert took the clicks meant for the world.** It stands in the middle of the screen and had the mouse switched on, so while a friend was down a right click over its area (400 x 150) did not reach the game. It lets the mouse through now. The party frame (the rows still take clicks: they target the friend) and the guardian list let the mouse through around and between their content too. `/gw2 move` still moves them.
+
 ## 1.9.1
 
 **Changed**

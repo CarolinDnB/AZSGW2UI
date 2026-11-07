@@ -18,7 +18,9 @@ function G.BuildRevive()
 	c:SetPoint("CENTER", UIParent, "CENTER", 0, 118);
 	c:SetFrameStrata("HIGH");
 	G.Register(c, true);
-	G.Movable(c, "revive", "Ally down alert", nil, nil, true);
+	-- no mouse on the alert: it stands in the middle of the screen, and a frame with the mouse on takes the clicks that are meant
+	-- for the world (right click to turn, to interact). /gw2 move still moves it.
+	G.Movable(c, "revive", "Ally down alert");
 	c:Hide();
 	G.reviveFrame = c;
 

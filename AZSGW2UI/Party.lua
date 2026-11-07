@@ -266,7 +266,7 @@ function G.BuildParty()
 	c:SetPoint("LEFT", UIParent, "LEFT", 14, 80);
 	c:SetFrameStrata("MEDIUM");
 	G.Register(c, true);
-	G.Movable(c, "party", "Party", nil, nil, true);
+	G.Movable(c, "party", "Party");                    -- the rows take the mouse, the frame around them does not
 	c:Hide();
 	G.party = c;
 
@@ -615,6 +615,99 @@ function G.UpdateParty(dt)
 		else
 			c.rows[i]:Hide();
 			c.rows[i].unit, c.rows[i].entry = nil, nil;
+		end
+	end
+end
+
+------------------------------------------------------------------------ marking the allies
+
+-- When you join a co-op game (the party forms, a hero comes or goes, or a new run begins) every ally gets one of the game's
+-- raid icons, so the allies can be told apart in the swarm. The icon is the hero's place in the party sorted by name, you
+-- included: every player who runs this addon gives the same icon to the same hero, and nobody takes an icon from another. A
+-- mark that is already on an ally is left alone, and one you take off is not put back until the party changes or a new run
+-- begins. Setting a mark can fail while the units are not there yet (or if the game does not let you), so after a change it is
+-- tried once a second for a little while.
+local ALLY_ICONS = { 1, 2, 3, 4, 5 };
+local ALLY_ICON_NAMES = { "star", "circle", "diamond", "triangle", "moon" };
+local MARK_TRIES = 15;                                      -- seconds an ally is tried for after a change
+local markSig, markUntil, markNext = nil, 0, 0;
+
+-- everyone in the party by name: the sorted names, and the unit of each ally (you have none)
+local function PartyRoster()
+	local n = 0;
+	if ( GetNumPartyMembers ) then
+		n = GetNumPartyMembers() or 0;
+	end
+	local me = UnitName and UnitName("player");
+	if ( n == 0 or not me ) then
+		return nil;
+	end
+	local names, units = { me }, {};
+	for i = 1, math.min(n, MEMBERS) do
+		local unit = "party" .. i;
+		local name = UnitName(unit);
+		if ( name and name ~= me and not units[name] ) then
+			table.insert(names, name);
+			units[name] = unit;
+		end
+	end
+	table.sort(names);
+	return names, units;
+end
+
+function G.UpdateMarks(dt)
+	local setIcon = SetRaidTargetIcon or SetRaidTarget;
+	if ( not G.Opt("markAllies") or not setIcon or not GetRaidTargetIndex ) then
+		markSig = nil;                                      -- turned on later: marks at once
+		return;
+	end
+	local names, units = PartyRoster();
+	if ( not names ) then
+		markSig = nil;                                      -- out of a party: the next one is a new one
+		return;
+	end
+	local sig = table.concat(names, "\n") .. "\t" .. tostring(AZS_RUN and AZS_RUN.run);
+	local now = GetTime();
+	if ( sig ~= markSig ) then
+		markSig, markUntil, markNext = sig, now + MARK_TRIES, 0;
+	end
+	if ( now > markUntil or now < markNext ) then
+		return;
+	end
+	markNext = now + 1;
+	local open = false;
+	for rank = 1, table.getn(names) do
+		local unit = units[names[rank]];
+		local icon = ALLY_ICONS[rank];
+		if ( unit and icon and ( GetRaidTargetIndex(unit) or 0 ) == 0 ) then
+			pcall(setIcon, unit, icon);
+			open = true;                                    -- looked at again in a second: did it take?
+		end
+	end
+	if ( not open ) then
+		markUntil = 0;
+	end
+end
+
+-- /gw2 marks: who is in the party, which icon each ally should have and which one it has
+function G.AllyMarksReport()
+	G.Print("marking allies is " .. ( G.Opt("markAllies") and "on" or "off" ) .. " (/gw2 marks on | off), SetRaidTargetIcon "
+		.. tostring( ( SetRaidTargetIcon or SetRaidTarget ) ~= nil ) .. ", GetRaidTargetIndex " .. tostring(GetRaidTargetIndex ~= nil));
+	local names, units = PartyRoster();
+	if ( not names ) then
+		G.Print("  you are not in a party");
+		return;
+	end
+	for rank = 1, table.getn(names) do
+		local name = G.Plain(names[rank]);
+		local unit = units[names[rank]];
+		local want = ALLY_ICON_NAMES[rank] or "none";
+		if ( not unit ) then
+			G.Print("  " .. name .. " (you): " .. want .. " by the others, not set by us");
+		else
+			local have = GetRaidTargetIndex and GetRaidTargetIndex(unit) or 0;
+			G.Print("  " .. name .. " (" .. unit .. "): should have " .. want .. ", has "
+				.. ( ( have or 0 ) == 0 and "none" or ( ALLY_ICON_NAMES[have] or ( "icon " .. have ) ) ));
 		end
 	end
 end

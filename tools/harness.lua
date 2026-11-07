@@ -74,7 +74,8 @@ impl.SetFrameLevel = function(self, v) needNum("SetFrameLevel", v); self.level =
 impl.SetFrameStrata = function(self, s) assert(type(s) == "string"); self.strata = s end
 impl.GetName = function(self) return rawget(self, "_name") end
 impl.GetParent = function(self) return self.parent end
-impl.EnableMouse = function() end
+impl.EnableMouse = function(self, v) self.mouseOn = ( v ~= false ) end
+impl.IsMouseEnabled = function(self) return self.mouseOn and true or false end
 impl.EnableMouseWheel = function() end
 impl.SetParent = function(self, p) assert(type(p) == "table", "SetParent needs a frame"); self.parent = p end
 impl.SetMaskTexture = function(self, path) assert(type(path) == "string"); self.mask = path end
@@ -529,7 +530,8 @@ local partyData = {
 local clientTarget = nil   -- { name, hostile, dead, class, hp, hpm }
 local mouseTarget = nil    -- the unit under the mouse: { name }
 function UnitExists(u) if u == "target" then return clientTarget ~= nil end if u == "mouseover" then return mouseTarget ~= nil end return partyData[u] ~= nil end
-function UnitName(u) if u == "target" then return clientTarget and clientTarget.name end if u == "mouseover" then return mouseTarget and mouseTarget.name end return partyData[u] and partyData[u].name end
+local playerName = nil    -- UnitName("player"), only when a scenario wants one
+function UnitName(u) if u == "target" then return clientTarget and clientTarget.name end if u == "mouseover" then return mouseTarget and mouseTarget.name end if u == "player" then return playerName end return partyData[u] and partyData[u].name end
 function UnitCanAttack(a, b) return clientTarget ~= nil and clientTarget.hostile end
 function UnitClassification(u) return clientTarget and clientTarget.class or "normal" end
 function UnitClass(u) if u == "target" then return "Local", clientTarget and clientTarget.class end return "Local", partyData[u] and partyData[u].class end
@@ -1329,159 +1331,109 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	for _, pl in ipairs({ hero, hero2, wolf, totem, tree, imp, odd }) do pl.frame.shown = false end
 	AZS_TOTEMS = {}
 
-	-- marks: bosses and guardians get the game's icons when they are targeted
-	local setCalls, marked, kinds = {}, {}, {}
-	SetRaidTargetIcon = function(u, i) table.insert(setCalls, u .. "=" .. i); marked[u] = i end
-	GetRaidTargetIndex = function(u) return marked[u] end
-	AZS_UnitKind = function(u) return kinds[u] end
-	assert(G.Opt("marks") == true, "marking is on by default")
-	-- what the game says: the list of special enemies alive and the target table, in step with the kind
-	local function listed(name, kind)
-		AZS_UNITS = { { kind = "elite", id = 1, name = "Bone Warden", hp = 3000, hpm = 5000, state = 0 } }
-		if kind == "boss" or kind == "guardian" or kind == "final" or kind == "elite" then
-			table.insert(AZS_UNITS, { kind = kind, id = 9, name = name, hp = 100, hpm = 100, state = 0 })
-		end
-	end
-	local function gameSays(name, kind)
-		kinds.target = kind
-		listed(name, kind)
-		AZS_TARGET = { kind = kind or "none", id = 9, name = name, hp = 100, hpm = 100, state = 0 }
-	end
-	local function target(name, kind)
-		now = now + 40                                       -- marks of a moment ago are not a burst
-		setCalls = {}; marked.target = nil
-		clientTarget = { name = name, hostile = true, hp = 100, hpm = 100, class = "normal" }
-		gameSays(name, kind)
-		fire("PLAYER_TARGET_CHANGED")
-	end
-	target("Lord Ashvane", "boss"); runTicks(4, 0.1)
-	assert(#setCalls == 1 and setCalls[1] == "target=8", "boss: " .. table.concat(setCalls, ","))
-	marked.target = nil; runTicks(40, 0.1)
-	assert(#setCalls == 1, "the same target was marked again after the mark was taken off: " .. #setCalls)
-	target("Bone Keeper", "guardian"); runTicks(4, 0.1)
-	assert(#setCalls == 1 and setCalls[1] == "target=7", "guardian: " .. table.concat(setCalls, ","))
-	target("Defias Captain", "elite"); runTicks(4, 0.1)
-	assert(#setCalls == 0, "an elite was marked")
-	target("Defias Thug", "normal"); runTicks(4, 0.1)
-	assert(#setCalls == 0, "an ordinary enemy was marked")
-	target("Final One", "final"); runTicks(4, 0.1)
-	assert(#setCalls == 1 and setCalls[1] == "target=8", "final boss: " .. table.concat(setCalls, ","))
-	-- a mark that is already there is left alone
-	setCalls = {}; marked.target = 3
-	clientTarget = { name = "Lord Ashvane", hostile = true, hp = 100, hpm = 100, class = "normal" }; gameSays("Lord Ashvane", "boss")
-	fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
-	assert(#setCalls == 0 and marked.target == 3, "an existing mark was changed")
-	-- the kind is not known yet when the target changes: it is waited for a little
-	setCalls = {}; marked.target = nil; kinds.target = nil
-	clientTarget = { name = "Late One", hostile = true, hp = 100, hpm = 100, class = "normal" }
-	fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
-	assert(#setCalls == 0)
-	gameSays("Late One", "guardian"); runTicks(4, 0.1)
-	assert(#setCalls == 1 and setCalls[1] == "target=7", "late kind: " .. table.concat(setCalls, ","))
-	-- the kind trails a click: the target is an ordinary enemy now, the game still says the boss it was before.
-	-- Nothing is marked, whether the game's target table is the old one or already new but the kind is not.
-	now = now + 40
-	gameSays("Lord Ashvane", "boss"); clientTarget = { name = "Lord Ashvane", hostile = true, hp = 100, hpm = 100, class = "normal" }
-	fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
-	now = now + 40; setCalls = {}; marked.target = nil
-	local refused0 = G.marksRefused or 0
-	clientTarget = { name = "Defias Thug", hostile = true, hp = 100, hpm = 100, class = "normal" }
-	fire("PLAYER_TARGET_CHANGED"); runTicks(10, 0.1)
-	assert(#setCalls == 0, "an ordinary enemy was marked with the kind of the target before: " .. table.concat(setCalls, ","))
-	AZS_TARGET = { kind = "normal", id = 3, name = "Defias Thug", hp = 100, hpm = 100, state = 0 }; runTicks(10, 0.1)
-	assert(#setCalls == 0, "an ordinary enemy was marked with the kind of the target before (target table caught up)")
-	kinds.target = "boss"; runTicks(4, 0.1)                  -- a kind that does not fit the unit, even with a list that has a boss
-	assert(#setCalls == 0, "marked a unit that is no boss: the list has no such unit")
-	kinds.target = "normal"; runTicks(40, 0.1)
-	assert(#setCalls == 0 and G.marksRefused > refused0, "the refused kind was not counted")
-	-- and the other way round: the new target is a boss, the game still says ordinary for a moment
-	now = now + 40; setCalls = {}; marked.target = nil
-	gameSays("Defias Thug", "normal")
-	clientTarget = { name = "Lord Ashvane", hostile = true, hp = 100, hpm = 100, class = "normal" }
-	fire("PLAYER_TARGET_CHANGED"); runTicks(10, 0.1)
-	assert(#setCalls == 0)
-	gameSays("Lord Ashvane", "boss"); runTicks(4, 0.1)
-	assert(#setCalls == 1 and setCalls[1] == "target=8", "a boss behind a lagging kind: " .. table.concat(setCalls, ","))
-	-- a list of an old run, or no list: not marked
-	now = now + 40; setCalls = {}; marked.target = nil
-	AZS_UNITS_UPDATED = 50; AZS_ZONE_UPDATED = 100                    -- the list was last changed before this run began
-	fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
-	assert(#setCalls == 0, "marked from the list of the run before")
-	AZS_ZONE_UPDATED = nil; AZS_UNITS_UPDATED = nil
-	local keepList = AZS_UNITS; AZS_UNITS = nil
-	fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
-	assert(#setCalls == 0, "marked with no list at all")
-	AZS_UNITS = keepList
-	-- a mark that is a burst: the fourth within half a minute is not set and the option goes off
-	G.SetOpt("marks", true)
-	now = now + 40; setCalls = {}
-	for _, nm in ipairs({ "Boss A", "Boss B", "Boss C" }) do
-		marked.target = nil
-		clientTarget = { name = nm, hostile = true, hp = 100, hpm = 100, class = "normal" }; gameSays(nm, "boss")
-		fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
-	end
-	assert(#setCalls == 3, "three marks in a row: " .. #setCalls)
-	marked.target = nil
-	clientTarget = { name = "Boss D", hostile = true, hp = 100, hpm = 100, class = "normal" }; gameSays("Boss D", "boss")
-	fire("PLAYER_TARGET_CHANGED"); runTicks(4, 0.1)
-	assert(#setCalls == 3 and G.Opt("marks") == false, "a burst of marks was not stopped")
-	G.SetOpt("marks", true); now = now + 40; G.lastMark = nil
-	target("Boss E", "boss"); runTicks(4, 0.1)
-	assert(#setCalls == 1 and G.lastMark and string.find(G.lastMark, "Boss E"), "marking did not carry on after the quiet time")
-	-- and not for ever: a friend (no kind) is not asked about all the time
-	setCalls = {}; kinds.target = nil; marked.target = nil
-	clientTarget = { name = "Zaynor", hostile = false, hp = 100, hpm = 100, class = "rogue" }
-	local asked = 0; local oldKind = AZS_UnitKind
-	AZS_UnitKind = function(u) asked = asked + 1; return oldKind(u) end
-	G.SetOpt("marks", false)
-	fire("PLAYER_TARGET_CHANGED"); runTicks(60, 0.1)
-	local others = asked                                     -- what the rest of the UI asks about the target in that time
-	G.SetOpt("marks", true); asked = 0
-	fire("PLAYER_TARGET_CHANGED"); runTicks(60, 0.1)
-	assert(asked - others <= 20, "marks asked " .. (asked - others) .. " times about a friend")
-	AZS_UnitKind = oldKind
-	-- the unit under the mouse: a boss is known there, a guardian reads as an elite
-	now = now + 40; setCalls = {}; marked.mouseover = nil
-	mouseTarget = { name = "Lord Ashvane" }; kinds.mouseover = "boss"; listed("Defias Thug", "normal")
-	fire("UPDATE_MOUSEOVER_UNIT"); runTicks(4, 0.1)
-	assert(#setCalls == 0, "mouseover boss marked, but the list has no such boss")
-	listed("Lord Ashvane", "boss")
-	fire("UPDATE_MOUSEOVER_UNIT"); runTicks(4, 0.1)
-	assert(#setCalls == 1 and setCalls[1] == "mouseover=8", "mouseover boss: " .. table.concat(setCalls, ","))
-	-- the same name is an ordinary elite as well: there is no telling which one is under the mouse
-	now = now + 40; setCalls = {}; marked.mouseover = nil
-	listed("Lord Ashvane", "boss"); table.insert(AZS_UNITS, { kind = "elite", id = 12, name = "Lord Ashvane", hp = 1, hpm = 1, state = 0 })
-	fire("UPDATE_MOUSEOVER_UNIT"); runTicks(4, 0.1)
-	assert(#setCalls == 0, "mouseover: marked a unit that shares its name with an elite")
-	now = now + 40; setCalls = {}; marked.mouseover = nil; listed("Lord Ashvane", "boss")
-	setCalls = {}; marked.mouseover = nil; kinds.mouseover = "elite"
-	fire("UPDATE_MOUSEOVER_UNIT"); runTicks(4, 0.1)
-	assert(#setCalls == 0, "mouseover elite marked")
-	mouseTarget = nil
-	-- the option
-	G.SetOpt("marks", false)
-	target("Lord Ashvane", "boss"); runTicks(4, 0.1)
-	assert(#setCalls == 0, "marked with the option off")
-	SlashCmdList["AZSGW2"]("marks on")
-	assert(G.Opt("marks") == true)
-	target("Lord Ashvane", "boss"); runTicks(4, 0.1)
-	assert(#setCalls == 1, "marking did not come back")
-	SlashCmdList["AZSGW2"]("marks")
-	-- a client without the raid icon functions: nothing breaks
-	local s1, s2 = SetRaidTargetIcon, GetRaidTargetIndex
-	SetRaidTargetIcon, GetRaidTargetIndex = nil, nil
-	target("Lord Ashvane", "boss"); runTicks(4, 0.1)
-	-- a call that raises an error is caught
-	SetRaidTargetIcon, GetRaidTargetIndex = function() error("not allowed") end, s2
-	target("Lord Ashvane", "boss"); runTicks(4, 0.1)
-	SetRaidTargetIcon, GetRaidTargetIndex, AZS_UnitKind = nil, nil, nil
-	AZS_TARGET = nil; AZS_UNITS = nil
-	clientTarget = nil; fire("PLAYER_TARGET_CHANGED")
 	-- back to nothing
 	G.SetOpt("nameplates", false); G.EnforcePlates(); runTicks(4, 0.1)
 	for _, pl in ipairs({ grunt, captain }) do assert(pl.hb:GetAlpha() == 1, "plates not given back") end
 	SlashCmdList["AZSGW2"]("plates debug")
-	print("nameplate repairs, orange elites, marks, pets ok")
+	print("nameplate repairs, orange elites, pets ok")
+end)
+
+scenario("allies: marked with the game's raid icons when you join a co-op game", function()
+	local setCalls, marked = {}, {}
+	SetRaidTargetIcon = function(u, i) table.insert(setCalls, u .. "=" .. i); marked[u] = i end
+	GetRaidTargetIndex = function(u) return marked[u] end
+	playerName = "Aelara"
+	assert(G.Opt("markAllies") == true, "marking allies is on by default")
+	assert(G.Opt("marks") == nil, "the option of the boss marks is gone")
+	-- you (Aelara) and Carolin, Ghost, Zaynor: sorted, the icons go star, circle, diamond, triangle, moon
+	runTicks(30, 0.1)
+	table.sort(setCalls)
+	assert(table.concat(setCalls, ",") == "party1=4,party2=2,party3=3", "marks: " .. table.concat(setCalls, ","))
+	setCalls = {}; runTicks(200, 0.1)
+	assert(#setCalls == 0, "marked again with nothing changed: " .. table.concat(setCalls, ","))
+	-- a mark that is taken off stays off while nothing changes
+	marked.party1 = nil; runTicks(60, 0.1)
+	assert(#setCalls == 0, "a mark that was taken off was put back")
+	-- a hero leaves: the places move up (Aelara, Carolin, Zaynor), the one that is missing a mark gets it
+	GetNumPartyMembers = function() return 2 end
+	partyData.party3, partyData.party2 = nil, { name = "Carolin", class = "WARLOCK", hp = 700, hpm = 1500 }
+	marked.party3 = nil                                      -- the hero is gone, and the mark with it
+	runTicks(30, 0.1)
+	assert(#setCalls == 1 and setCalls[1] == "party1=3", "a hero left: " .. table.concat(setCalls, ","))
+	-- a mark somebody else put on is left alone, also when the party changes
+	setCalls = {}; marked.party2 = 7
+	GetNumPartyMembers = function() return 3 end
+	partyData.party3 = { name = "Ghost", class = "MAGE", hp = 0, hpm = 900 }
+	runTicks(30, 0.1)
+	assert(marked.party2 == 7, "somebody else's mark was changed")
+	assert(#setCalls == 1 and setCalls[1] == "party3=3", "the hero that came back: " .. table.concat(setCalls, ","))
+	-- a new run marks again whoever has lost a mark (the heroes are new)
+	marked.party2 = nil; marked.party3 = nil; setCalls = {}
+	AZS_RUN.run = "run-2"; runTicks(30, 0.1)
+	table.sort(setCalls)
+	assert(table.concat(setCalls, ",") == "party2=2,party3=3", "a new run: " .. table.concat(setCalls, ","))
+	-- the option: off marks nothing, on again marks at once
+	G.SetOpt("markAllies", false)
+	marked.party1, marked.party2, marked.party3 = nil, nil, nil; setCalls = {}
+	AZS_RUN.run = "run-3"; runTicks(40, 0.1)
+	assert(#setCalls == 0, "marked with the option off")
+	SlashCmdList["AZSGW2"]("marks on")
+	assert(G.Opt("markAllies") == true)
+	runTicks(30, 0.1)
+	assert(#setCalls == 3, "marking did not come back: " .. table.concat(setCalls, ","))
+	-- out of a party: nothing, and the next party is marked
+	GetNumPartyMembers = function() return 0 end
+	marked.party1, marked.party2, marked.party3 = nil, nil, nil; setCalls = {}
+	runTicks(30, 0.1)
+	assert(#setCalls == 0, "marked out of a party")
+	SlashCmdList["AZSGW2"]("marks")
+	GetNumPartyMembers = function() return 3 end
+	runTicks(30, 0.1)
+	assert(#setCalls == 3, "a new party was not marked: " .. table.concat(setCalls, ","))
+	SlashCmdList["AZSGW2"]("marks")
+	-- the game takes the mark only after a moment: it is tried again for a while
+	marked.party1, marked.party2, marked.party3 = nil, nil, nil; setCalls = {}
+	local fails = 3
+	SetRaidTargetIcon = function(u, i) table.insert(setCalls, u .. "=" .. i); if fails > 0 then fails = fails - 1 else marked[u] = i end end
+	AZS_RUN.run = "run-4"; runTicks(100, 0.1)
+	assert(marked.party1 == 4 and marked.party2 == 2 and marked.party3 == 3, "marks never took: " .. table.concat(setCalls, ","))
+	-- and not for ever when the game does not let us (an error is caught too)
+	marked.party1, marked.party2, marked.party3 = nil, nil, nil; setCalls = {}
+	SetRaidTargetIcon = function(u, i) table.insert(setCalls, u .. "=" .. i); error("not allowed") end
+	AZS_RUN.run = "run-5"; runTicks(400, 0.1)
+	assert(#setCalls > 0 and #setCalls <= 3 * 16, "tries: " .. #setCalls)
+	-- a client without the raid icon functions: nothing breaks
+	SetRaidTargetIcon, GetRaidTargetIndex = nil, nil
+	AZS_RUN.run = "run-6"; runTicks(30, 0.1)
+	SlashCmdList["AZSGW2"]("marks")
+	-- a name the game does not give yet
+	local keep = partyData.party2.name; partyData.party2.name = nil
+	SetRaidTargetIcon, GetRaidTargetIndex = function(u, i) marked[u] = i end, function(u) return marked[u] end
+	marked = {}; AZS_RUN.run = "run-7"; runTicks(30, 0.1)
+	assert(marked.party2 == nil and marked.party1 and marked.party3, "a hero without a name was marked")
+	partyData.party2.name = keep
+	SetRaidTargetIcon, GetRaidTargetIndex, playerName, AZS_RUN.run = nil, nil, nil, nil
+	runTicks(10, 0.1)
+	print("ally marks ok")
+end)
+
+scenario("the UI lets clicks through to the world where it should", function()
+	-- the alert for a fallen friend stands in the middle of the screen: no frame of it takes the mouse
+	downedList = { { id = "H2", name = "Ghost", positionAvailable = false } }
+	runTicks(6, 0.05)
+	assert(G.reviveFrame.shown, "no alert to look at")
+	assert(not G.reviveFrame:IsMouseEnabled(), "the ally down alert takes the clicks meant for the world")
+	for i = 1, #G.reviveFrame.rows do assert(not G.reviveFrame.rows[i]:IsMouseEnabled(), "an alert row takes the mouse") end
+	for i = 1, #G.reviveMarks do assert(not G.reviveMarks[i]:IsMouseEnabled(), "a marker over a body takes the mouse") end
+	-- the party frame and the guardian list: the frame around does not, the rows of the party still do
+	assert(not G.party:IsMouseEnabled(), "the party frame takes the clicks around its rows")
+	assert(not G.guardians:IsMouseEnabled(), "the guardian list takes the mouse")
+	-- the party rows are buttons: a click on a friend still targets it
+	assert(G.party.rows[1].scripts.OnClick or G.party.rows[1].scripts.OnMouseUp, "a party row lost its click")
+	-- and /gw2 move can still move the alert: the move box of every movable frame has the mouse
+	local key = G.movableOf[G.reviveFrame]
+	assert(key == "revive", "the alert is not movable any more")
+	downedList = { { id = "H2", name = "Ghost", positionAvailable = false } }
 end)
 
 scenario("settings window + unlock layout", function()
@@ -1506,7 +1458,7 @@ scenario("settings window + unlock layout", function()
 	local labels = {}
 	for _, c in ipairs(f.checks) do labels[c.row.label] = true end
 	assert(labels["   only elites and guardians"] and labels["Enable friendly nameplates"] and labels["Max targets, on the skills"]
-		and labels["   show pets and summons"] and labels["   hide totems"] and labels["Mark bosses and guardians"], "settings rows missing")
+		and labels["   show pets and summons"] and labels["   hide totems"] and labels["Mark allies in co-op games"], "settings rows missing")
 	assert(f:GetHeight() <= 640, "settings window too tall: " .. f:GetHeight())
 	-- minimap switch detaches and re-attaches the game's minimap
 	for _, c in ipairs(f.checks) do if c.row.label == "GW2 minimap" then c.scripts.OnClick() end end

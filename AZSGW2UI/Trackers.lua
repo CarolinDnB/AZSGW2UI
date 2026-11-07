@@ -14,7 +14,7 @@ function G.BuildGuardians()
 	f:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -12, -228);
 	f:SetFrameStrata("MEDIUM");
 	G.Register(f, true);
-	G.Movable(f, "guardians", "Guardian list", nil, nil, true);
+	G.Movable(f, "guardians", "Guardian list");        -- no mouse: the list lets clicks through to the world
 	G.guardians = f;
 
 	-- header like the boss list: a white horned skull, a crown and the title in red

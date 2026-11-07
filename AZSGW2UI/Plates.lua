@@ -12,7 +12,6 @@
 --
 -- Options: Enable Nameplates (enemies), Only Elites and Guardians, Enable Friendly Nameplates (heroes only, no pets, summons
 -- or totems). The plates show a bar and no name: the name is for the target bar.
--- This file also marks bosses and guardians with the game's own raid icons when you target them (option "marks").
 
 local G = AZSGW2;
 
@@ -640,118 +639,6 @@ function G.UpdatePlates(dt)
 	P.cursor = i;
 end
 
------------------------------------------------------------------------- marking bosses and guardians
-
--- The game's raid icons: a skull on a boss, a cross on a guardian. Only a unit you can name to the game can be marked: your
--- target, or the unit under the mouse. A guardian is only known for your target (the game reads it as an elite everywhere
--- else); a boss is known on both. A mark that is already there is never changed, and a mark you remove is not put back
--- until you target that unit again.
---
--- A mark stays on a creature for good, so it is only put on a unit that is surely what the game says it is. The game's kind
--- (AZS_UnitKind) and its target table come from the server and can trail a click on another enemy by a moment, while the
--- unit is the client's and changes at once: so the list of special enemies of this run must hold a unit of that kind under
--- the unit's name (for the target the game's target table must say the same), and until it does the unit is waited for. If
--- marks still come in a burst (BURST in WINDOW seconds) something is wrong, and marking switches itself off.
-local MARK_OF = { boss = 8, final = 8, guardian = 7 };
-local MARK_WAIT = 3;                                        -- seconds a new target / unit under the mouse is waited for
-local MARK_BURST, MARK_WINDOW = 4, 30;
-local markDue = { target = 0, mouseover = 0 };            -- until when the unit is waited for (GetTime), 0: nothing to do
-local markSeen = {};                                      -- what the game said of a unit that is not confirmed (for the report)
-local markLog = {};                                       -- when marks were set lately (GetTime)
-
-function G.NoteMarkEvent(unit)
-	markDue[unit] = GetTime() + MARK_WAIT;
-	markSeen[unit] = nil;
-end
-
--- is the unit what the game's kind says it is?
-local function Confirmed(unit, kind)
-	local name = UnitName(unit);
-	local list = AZS_UNITS;
-	if ( not name or type(list) ~= "table" or G.UnitsStale() ) then
-		return false;
-	end
-	if ( unit == "target" ) then
-		local t = AZS_TARGET;
-		if ( type(t) ~= "table" or t.kind ~= kind or t.name ~= name ) then
-			return false;
-		end
-	end
-	local found, other = false, false;
-	for i = 1, table.getn(list) do
-		local u = list[i];
-		if ( type(u) == "table" and u.name == name ) then
-			if ( u.kind == kind ) then
-				found = true;
-			elseif ( unit ~= "target" ) then
-				other = true;                                 -- another kind under the same name: there is no telling which it is
-			end
-		end
-	end
-	return found and not other;
-end
-
-local function MarkUnit(unit, setIcon)
-	local due = markDue[unit];
-	if ( due == 0 ) then
-		return;
-	end
-	local now = GetTime();
-	if ( now > due or not UnitExists(unit) ) then
-		markDue[unit] = 0;
-		if ( markSeen[unit] ) then
-			G.marksRefused = ( G.marksRefused or 0 ) + 1;
-			G.lastRefused = markSeen[unit];
-			markSeen[unit] = nil;
-		end
-		return;
-	end
-	local kind = AZS_UnitKind(unit);
-	local icon = kind and MARK_OF[kind];
-	if ( not icon ) then
-		return;                                           -- nothing to mark, or not known yet: looked at again until the time is up
-	end
-	if ( UnitIsDead and UnitIsDead(unit) ) then
-		markDue[unit] = 0;
-		return;
-	end
-	if ( not Confirmed(unit, kind) ) then
-		markSeen[unit] = G.Plain(UnitName(unit) or "?") .. " (" .. kind .. ")";
-		return;
-	end
-	markDue[unit] = 0;
-	markSeen[unit] = nil;
-	if ( ( GetRaidTargetIndex(unit) or 0 ) ~= 0 ) then
-		return;
-	end
-	while ( markLog[1] and now - markLog[1] > MARK_WINDOW ) do
-		table.remove(markLog, 1);
-	end
-	if ( table.getn(markLog) >= MARK_BURST - 1 ) then
-		G.SetOpt("marks", false);
-		G.Print("marking bosses and guardians is switched off: it was about to mark " .. MARK_BURST .. " units within "
-			.. MARK_WINDOW .. " seconds, which is not right. /gw2 plates debug says what it saw; /gw2 marks on turns it on again.");
-		return;
-	end
-	table.insert(markLog, now);
-	pcall(setIcon, unit, icon);
-	G.marksSet = ( G.marksSet or 0 ) + 1;
-	G.lastMark = G.Plain(UnitName(unit) or "?") .. " (" .. kind .. ", " .. unit .. ")";
-end
-
-function G.UpdateMarks(dt)
-	if ( not G.Opt("marks") ) then
-		markDue.target, markDue.mouseover = 0, 0;
-		return;
-	end
-	local setIcon = SetRaidTargetIcon or SetRaidTarget;
-	if ( not setIcon or not GetRaidTargetIndex or not AZS_UnitKind or not UnitExists ) then
-		return;
-	end
-	MarkUnit("target", setIcon);
-	MarkUnit("mouseover", setIcon);
-end
-
 -- what the plates see, for a report from the game: /gw2 plates debug
 function G.PlatesReport()
 	G.Print("nameplates: " .. ( G.Opt("nameplates") and "on" or "off" ) .. ", only elites and guardians: "
@@ -814,10 +701,6 @@ function G.PlatesReport()
 	end
 	G.Print("your totems by the API: " .. ( table.getn(tn) > 0 and G.Plain(table.concat(tn, ", ")) or "none" ) .. "; hiding totems: "
 		.. ( G.Opt("friendTotems") and "no" or "yes" ));
-	G.Print("marks " .. ( G.Opt("marks") and "on" or "off" ) .. ", set " .. ( G.marksSet or 0 ) .. " so far, SetRaidTargetIcon "
-		.. tostring( ( SetRaidTargetIcon or SetRaidTarget ) ~= nil ) .. ", GetRaidTargetIndex " .. tostring(GetRaidTargetIndex ~= nil));
-	G.Print("  last mark: " .. ( G.lastMark or "none" ) .. "; left unmarked because the game's kind did not fit the unit: "
-		.. ( G.marksRefused or 0 ) .. ( G.lastRefused and ( ", last " .. G.lastRefused ) or "" ));
 	if ( table.getn(P.list) == 0 ) then
 		-- the plates were not recognised: say what the first few unnamed frames under WorldFrame look like
 		local kids = { WorldFrame:GetChildren() };
