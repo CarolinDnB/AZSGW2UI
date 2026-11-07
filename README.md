@@ -24,9 +24,9 @@ Restart the game once (new texture files are only read at start), then enter a w
 | Experience: two curved yellow arcs that follow the top of the orb (left arc fills first, then the right one: clockwise), level badge between them | `AZS_RUN` xp / xpn |
 | Resource bar under the orb (rage, combo points, soul shards, Lightwell) | `AZS_RUN` |
 | Skill bar: 3 big slots on each side of the orb on a soft dark smoke, the round chip at the bottom of a slot is the skill's rank (no flashing), the red-ringed one at the top says how many enemies the skill can hit at most, upgrades and cards included (only shown from 2 on; read from the skill's own tooltip, so it is there without any enemy near). The racial sits left of the left three, Talents and Character are two small buttons right of the right three | `AZS_SPELLS`, key bindings |
-| Jewelry plate, buffs / debuffs above the right slots, summons / totems above the left ones | meter API loadout, `GetPlayerBuff*`, `AZS_Get*` |
+| Jewelry row beside the Talents / Character buttons, in the style of the F1 - F5 skills of Guild Wars 2: no window behind it, the amulet a little bigger than the rest, then the rings, then the trinkets. Buffs / debuffs above the right slots, summons / totems above the left ones | meter API loadout, `GetPlayerBuff*`, `AZS_Get*` |
 | Square GW2 minimap: zone plate with local time, zoom buttons and mouse wheel, a golden arrow for you (it turns with the hero), pins for caches, guardian lairs (asleep / awake / empty) and downed friends; far pins stick to the edge | the game's Minimap frame, `AZS_CHESTS`, `AZS_GetLairs`, `AZS_GetPlayerPosition` |
-| Guardian list under the minimap: a skull per guardian, a direction arrow for each and a big one in the header for the nearest | `AZS_GetLairs`, `AZS_GetPlayerPosition` |
+| Guardian list under the minimap: a skull per guardian, a direction arrow for each and a big one in the header for the nearest. Option *Health bars on the list*: an awake guardian gets its health bar with the percent under its name on the list, and is then no longer on the boss bar at the top (one or the other, never both) | `AZS_GetLairs`, `AZS_GetGuardians`, `AZS_GetPlayerPosition` |
 | Boss and guardian bars like the GW2 objective tracker: a red skull, crown and name per enemy, framed debuff icons, a red HP bar with the percentage. With more than one enemy a slim title ("Bosses", "Guardians") sits above them | `AZS_GetBosses`, `AZS_GetGuardians` |
 | Run bar with the difficulty: `NORMAL`, or `HEROIC I` to `HEROIC V` in orange, the affixes (Bolstering, Sanguine, Explosive) at the right end of the line under the bar | `AZS_ZONE` heroic / affixes |
 | Kills / gold / cache strip with the kills per minute as `[18/m]` (tooltip: run average and last minute) | `AZS_RUN`, run clock |
@@ -43,7 +43,7 @@ Restart the game once (new texture files are only read at start), then enter a w
 read from what the client reports: health above the maximum is drawn as a gold layer **on top of** the health bar with a
 bright top edge and its amount (`+300`), and a shield buff on a friend (Power Word: Shield, Ice Barrier, Mana Shield, the
 wards, Sacrifice) puts a fainter gold layer over the health when no amount is known. The percent text stays above the layer.
-`/gw2 party` shows what the client says about each friend.
+`/gw2 partyinfo` shows what the client says about each friend.
 
 **Meter reset.** The game's counters cannot be cleared from an addon, so Reset remembers every line's amount at that moment and
 shows the difference from then on (the game's own meter window keeps its numbers). It ends by itself when a new run starts or a
@@ -66,7 +66,7 @@ the chat ("hid the game's own popup (name)"). That search is small on purpose: o
 
 ## Settings and moving things
 
-Click the round icon at the minimap (or `/gw2 config`): switches for every part, size, "Unlock layout", "Reset positions".
+Click the round icon at the minimap (or `/gw2 config`): a window in the style of the hero panel, with a list of pages on the left and the switches of the chosen page on the right. The pages are *Interface* (target bar, party frames, hero panel, size, "Unlock layout", "Reset positions"), *Nameplates* (enemies, friends), *Damage* (damage numbers, damage meter), *Map & Guardians* (minimap, caches and guardians on it, guardian list, direction arrows, health bars on the list) and *Utility* (co-op alerts and marks, max targets on the skills, the game's centre-screen messages).
 Unlocked, every frame gets a gold box with its name and size: drag it to move it, drag its corner (or use the mouse wheel) to make just that part bigger or smaller, right click puts its size back. A bar at the top of the screen locks the layout again. "Size" in the settings is still the size of everything at once; the single sizes are on top of it. Parts that belong together (the orb and its skill bar, for example) resize together.
 
 ## Commands
@@ -98,7 +98,7 @@ Unlocked, every frame gets a gold box with its name and size: drag it to move it
     /gw2 dmg ticks on | ticks off     damage over time ticks in the numbers
     /gw2 char [on | off]              open the hero panel / use it instead of the game's character window
     /gw2 stats                        every value of AZS_STATS, to check what the Attributes show
-    /gw2 party                        health and buffs of each friend as the client reports them
+    /gw2 partyinfo                    health and buffs of each friend as the client reports them
     /gw2 bind <character|talents> <BINDING>
     /gw2 bindings [text]              list key binding names
     /gw2 debug                        HUD part states, hidden frames, bindings, minimap and damage number status
@@ -137,7 +137,7 @@ Unlocked, every frame gets a gold box with its name and size: drag it to move it
 - The game's own character window comes up instead of the hero panel: `/gw2 char on`. Outside a run the game's window is used
   on purpose; `/gw2 char` opens the panel directly.
 - Right click on a party frame shows no menu or Inspect does nothing: the chat says why ("too far away to inspect (about 28 yards)", "Inspect is not available in this game version", or "party menu failed" with the reason).
-- No barrier on a friend: `/gw2 party` shows their health and buffs; a shield the client does not report cannot be drawn.
+- No barrier on a friend: `/gw2 partyinfo` shows their health and buffs; a shield the client does not report cannot be drawn.
 - The Talents or Character button opens the wrong thing: `/gw2 bindings`, then `/gw2 bind talents <BINDING>`.
 - Nameplates look like the game's old ones: the skin needs the game's plate frames to look the way they do in the standard
   1.12 client. If they do not, nothing is hidden and the game's plates show as before; `/gw2 plates debug` prints what it finds,
@@ -175,6 +175,14 @@ load it, the game's own font is used.
 This is a fan made interface for Azeroth Survivors. It is not affiliated with or endorsed by ArenaNet, NCSOFT or Blizzard;
 "Guild Wars" is a trademark of ArenaNet / NCSOFT. The layout is inspired by Guild Wars 2's interface; all textures, icons and
 code here are original.
+
+## Changes in 1.10.0
+
+- The stats row under the run bar (kills / gold / cache) is centred under the bar now: the three cells have the same width and each is centred in its own third.
+- New option *Health bars on the list* (Map & Guardians): the health bar and percent of an awake guardian sit under that guardian on the guardian list instead of the boss bar at the top. A guardian is on one of them only, never both.
+- The settings window is rebuilt as pages (Interface, Nameplates, Damage, Map & Guardians, Utility) in the style of the hero panel.
+- The gear shown beside the spellbook and character buttons has no window any more: the amulet, a little bigger, then the rings, then the trinkets, like the F1 - F5 skills of Guild Wars 2.
+- The command that lists health and buffs of each friend is now `/gw2 partyinfo`.
 
 ## Changes in 1.9.2
 

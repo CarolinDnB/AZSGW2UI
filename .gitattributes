@@ -7,3 +7,4 @@
 # Never change the line endings of textures and fonts
 *.tga binary
 *.ttf binary
+*.mp3 binary

@@ -61,7 +61,7 @@ G.HUD_MAP_PARTS = { "flag", "localClock" };
 -- options (Settings window): what a missing value means
 G.OPTDEF = {
 	dmg = true, dmgPet = true, dmgCrit = false, dmgTicks = true, dmgNative = false, minimap = true, pinChest = true, pinGuard = true, arrows = true,
-	target = true, party = true, revive = true, meter = true, guardians = true, charPanel = true, hits = true,
+	target = true, party = true, revive = true, meter = true, guardians = true, guardianBars = false, charPanel = true, hits = true,
 	nameplates = false, platesElite = false, platesFriend = false, friendPets = true, friendTotems = true, markAllies = true,
 };
 

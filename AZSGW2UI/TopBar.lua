@@ -292,9 +292,15 @@ end
 
 ------------------------------------------------------------------------ tally (kills / gold / cache price)
 
+-- The strip is as wide as the run clock above it and split into three equal cells; what stands in a cell (icon, number,
+-- and for the kills the rate) is centred in its cell. So the middle cell, the gold, is exactly under the middle of the clock,
+-- and the two outer ones are the same distance to either side, whatever the numbers are.
+local TALLYW = BARW + 40;
+local CELLW = TALLYW / 3;
+
 function G.BuildTally()
 	local f = CreateFrame("Frame", "AZSGW2Tally", UIParent);
-	f:SetWidth(308);
+	f:SetWidth(TALLYW);
 	f:SetHeight(20);
 	f:SetPoint("TOP", UIParent, "TOP", 0, -70);
 	G.Movable(f, "tally", "Kills / gold", nil, nil, false);
@@ -307,23 +313,24 @@ function G.BuildTally()
 	bg:SetAllPoints(f);
 
 	local defs = {
-		{ key = "kills", icon = "Interface\\Icons\\INV_Sword_04", x = -96, w = 116, tip = "Enemies slain" },
-		{ key = "gold", icon = "Interface\\Icons\\INV_Misc_Coin_01", x = 8, w = 84, tip = "Gold" },
-		{ key = "chest", icon = "Interface\\Icons\\INV_Box_01", x = 96, w = 84, tip = "Price of the next cache" },
+		{ key = "kills", icon = "Interface\\Icons\\INV_Sword_04", tip = "Enemies slain" },
+		{ key = "gold", icon = "Interface\\Icons\\INV_Misc_Coin_01", tip = "Gold" },
+		{ key = "chest", icon = "Interface\\Icons\\INV_Box_01", tip = "Price of the next cache" },
 	};
 	f.items = {};
 	for i = 1, 3 do
 		local d = defs[i];
 		local h = CreateFrame("Frame", nil, f);
-		h:SetWidth(d.w);
+		h:SetWidth(CELLW);
 		h:SetHeight(18);
-		h:SetPoint("CENTER", f, "CENTER", d.x, 0);
+		h:SetPoint("CENTER", f, "CENTER", ( i - 2 ) * CELLW, 0);
 		local ic = h:CreateTexture(nil, "ARTWORK");
 		ic:SetTexture(d.icon);
 		ic:SetWidth(14);
 		ic:SetHeight(14);
 		ic:SetTexCoord(0.07, 0.93, 0.07, 0.93);
-		ic:SetPoint("LEFT", h, "LEFT", 4, 0);
+		ic:SetPoint("LEFT", h, "LEFT", ( CELLW - 18 ) / 2, 0);
+		h.icon = ic;
 		h.text = G.Text(h, 12, "LEFT");
 		h.text:SetPoint("LEFT", ic, "RIGHT", 4, 0);
 		if ( d.key == "kills" ) then
@@ -342,6 +349,30 @@ function G.BuildTally()
 			end
 		end, "ANCHOR_BOTTOM");
 		f.items[d.key] = h;
+	end
+end
+
+-- centres each cell's content (icon 14 + gap 4 + number [+ gap 5 + rate]) in the cell; only when the text changed
+function G.LayoutTally()
+	local f = G.tally;
+	if ( not f ) then
+		return;
+	end
+	for _, k in ipairs({ "kills", "gold", "chest" }) do
+		local h = f.items[k];
+		local w = 18 + h.text:GetStringWidth();
+		if ( h.rate ) then
+			w = w + 5 + h.rate:GetStringWidth();
+		end
+		local left = math.floor(( CELLW - w ) / 2 + 0.5);
+		if ( left < 0 ) then
+			left = 0;
+		end
+		if ( h.left ~= left ) then
+			h.left = left;
+			h.icon:ClearAllPoints();
+			h.icon:SetPoint("LEFT", h, "LEFT", left, 0);
+		end
 	end
 end
 
@@ -396,11 +427,19 @@ function G.UpdateTally(dt)
 	while ( table.getn(s) > 1 and t - s[2].t >= 60 ) do
 		table.remove(s, 1);       -- keep the newest sample that is still 60 s or older as the start
 	end
-	f.items.kills.text:SetText(G.Comma(run.kills));
 	local avg = G.KillRate();
-	f.items.kills.rate:SetText("[" .. G.RateText(avg) .. "/m]");
-	f.items.gold.text:SetText(G.Comma(run.gold));
-	f.items.chest.text:SetText(G.Comma(run.chest));
+	local ktext, rtext = G.Comma(run.kills), "[" .. G.RateText(avg) .. "/m]";
+	local gtext, ctext = G.Comma(run.gold), G.Comma(run.chest);
+	-- text and layout are touched only when something changed (this runs four times a second)
+	local key = ktext .. "|" .. rtext .. "|" .. gtext .. "|" .. ctext;
+	if ( f.shownKey ~= key ) then
+		f.shownKey = key;
+		f.items.kills.text:SetText(ktext);
+		f.items.kills.rate:SetText(rtext);
+		f.items.gold.text:SetText(gtext);
+		f.items.chest.text:SetText(ctext);
+		G.LayoutTally();
+	end
 end
 
 ------------------------------------------------------------------------ boss and guardian frames
@@ -498,6 +537,8 @@ local function NewFlatBar(parent, w, h, gold)
 	end;
 	return f;
 end
+
+G.NewFlatBar = NewFlatBar;
 
 function G.BuildBosses()
 	local c = CreateFrame("Frame", "AZSGW2Bosses", UIParent);
@@ -725,9 +766,11 @@ function G.UpdateBosses(dt)
 	local bossCount = table.getn(list);
 	if ( AZS_GetGuardians and not stale ) then
 		local guards = AZS_GetGuardians() or {};
+		-- with the health bars on the guardian list, a guardian that has its bar there is not in this one (never both)
+		local listed = G.ListedGuardians(guards);
 		for i = 1, table.getn(guards) do
 			local g = guards[i];
-			if ( g.awake and table.getn(list) < ROWS ) then
+			if ( g.awake and not listed[G.Num(g.id)] and table.getn(list) < ROWS ) then
 				table.insert(list, { kind = "guardian", name = g.name, hp = g.hp, hpm = g.hpm, debuffs = g.debuffs });
 			end
 		end

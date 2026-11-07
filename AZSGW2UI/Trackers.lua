@@ -6,11 +6,56 @@ local G = AZSGW2;
 ------------------------------------------------------------------------ guardian tracker
 
 local LAIRROWS = 8;
+local ROWH = 18;            -- one guardian: the line with the skull, the name and the distance
+local BARROW = 14;          -- extra room under a guardian that is fighting: its health bar (12) and a gap (2)
+local BARH = 12;
+local BARX = 24;            -- the bar starts under the name
+
+-- Where the health of the guardians is drawn: on the boss bar at the top (default), or as a bar with the percent under each
+-- guardian on this list. Never both. The list is only used while it is shown: with the list switched off the boss bar
+-- keeps the guardians, so their health is always somewhere.
+function G.GuardianBarsOnList()
+	return G.Opt("guardianBars") and G.Opt("guardians") and true or false;
+end
+
+-- for the guardians that are fighting (AZS_GetGuardians() entries): the lairs that show one, row by row, as
+-- { [row] = guardian }, and the set of guardian ids that are shown in them. Empty while the bars are at the top.
+function G.GuardianBars(guards)
+	local rows, ids = {}, {};
+	if ( not G.GuardianBarsOnList() or not AZS_GetLairs or G.UnitsStale() ) then
+		return rows, ids;
+	end
+	local lairs = AZS_GetLairs();
+	if ( not lairs or not guards ) then
+		return rows, ids;
+	end
+	local awake = {};
+	for i = 1, table.getn(guards) do
+		local g = guards[i];
+		if ( g.awake and g.id ~= nil ) then
+			awake[G.Num(g.id)] = g;
+		end
+	end
+	for i = 1, math.min(table.getn(lairs), LAIRROWS) do
+		local id = G.Num(lairs[i].id);
+		if ( id > 0 and awake[id] and not ids[id] ) then
+			rows[i] = awake[id];
+			ids[id] = true;
+		end
+	end
+	return rows, ids;
+end
+
+-- the boss bar asks only for the ids
+function G.ListedGuardians(guards)
+	local _, ids = G.GuardianBars(guards);
+	return ids;
+end
 
 function G.BuildGuardians()
 	local f = CreateFrame("Frame", "AZSGW2Guardians", UIParent);
 	f:SetWidth(250);
-	f:SetHeight(28 + LAIRROWS * 18);
+	f:SetHeight(28 + LAIRROWS * ROWH);
 	f:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -12, -228);
 	f:SetFrameStrata("MEDIUM");
 	G.Register(f, true);
@@ -60,8 +105,8 @@ function G.BuildGuardians()
 	for i = 1, LAIRROWS do
 		local r = CreateFrame("Frame", nil, f);
 		r:SetWidth(250);
-		r:SetHeight(18);
-		r:SetPoint("TOPLEFT", f, "TOPLEFT", 0, -24 - (i - 1) * 18);
+		r:SetHeight(ROWH);
+		r:SetPoint("TOPLEFT", f, "TOPLEFT", 0, -24 - (i - 1) * ROWH);
 		r.skull = r:CreateTexture(nil, "ARTWORK");
 		G.SetSkull(r.skull, "tiny");
 		r.skull:SetWidth(16);
@@ -79,6 +124,12 @@ function G.BuildGuardians()
 		r.name:SetHeight(14);
 		r.info = G.TextS(r, 12, "RIGHT");
 		r.info:SetPoint("RIGHT", r, "RIGHT", -22, 0);
+		-- the health bar of a fighting guardian, under its line (only with the bars on the list)
+		r.bar = G.NewFlatBar(r, 250 - BARX - 4, BARH);
+		r.bar:SetPoint("TOPLEFT", r, "BOTTOMLEFT", BARX, -1);
+		r.bar.pct = G.TextS(r.bar, 10, "CENTER");
+		r.bar.pct:SetPoint("CENTER", r.bar, "CENTER", 0, 0);
+		r.bar:Hide();
 		r:Hide();
 		f.rows[i] = r;
 	end
@@ -102,7 +153,9 @@ function G.UpdateGuardians(dt)
 		return;
 	end
 	f:Show();
-	f:SetHeight(28 + math.min(n, LAIRROWS) * 18);
+
+	local barOf = G.GuardianBars(AZS_GetGuardians and AZS_GetGuardians() or nil);
+	local y, bars = 24, 0;
 
 	local p = nil;
 	if ( AZS_GetPlayerPosition ) then
@@ -117,6 +170,37 @@ function G.UpdateGuardians(dt)
 		row.lair = l;
 		if ( l ) then
 			row:Show();
+			-- rows stack from the top; a row with a bar is taller by the bar
+			if ( row.curY ~= y ) then
+				row.curY = y;
+				row:ClearAllPoints();
+				row:SetPoint("TOPLEFT", f, "TOPLEFT", 0, -y);
+			end
+			y = y + ROWH;
+			local g = barOf[i];
+			if ( g ) then
+				bars = bars + 1;
+				y = y + BARROW;
+				local hpm = G.Num(g.hpm);
+				local frac = 0;
+				if ( hpm > 0 ) then
+					frac = G.Clamp(G.Num(g.hp) / hpm, 0, 1);
+				end
+				row.bar:SetFrac(frac);
+				local pct = math.floor(frac * 100 + 0.5);
+				if ( row.cPct ~= pct ) then
+					row.cPct = pct;
+					row.bar.pct:SetText(pct .. "%");
+				end
+				if ( not row.barOn ) then
+					row.barOn = true;
+					row.bar:Show();
+				end
+			elseif ( row.barOn ) then
+				row.barOn = false;
+				row.cPct = nil;
+				row.bar:Hide();
+			end
 			row.name:SetText(tostring(l.name or "?"));
 			local dist = nil;
 			if ( p and l.x and l.spaceId == p.spaceId and l.state ~= "empty" ) then
@@ -154,7 +238,17 @@ function G.UpdateGuardians(dt)
 			end
 		else
 			row:Hide();
+			row.curY = nil;
+			if ( row.barOn ) then
+				row.barOn = false;
+				row.cPct = nil;
+				row.bar:Hide();
+			end
 		end
+	end
+	if ( f.curH ~= y + 4 ) then
+		f.curH = y + 4;
+		f:SetHeight(y + 4);
 	end
 	f.count:SetText(string.format("%d / %d", held, n));
 	f.count:SetTextColor(0.75, 0.75, 0.75);

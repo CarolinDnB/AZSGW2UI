@@ -1,10 +1,18 @@
 -- AZS GW2 UI: Settings.lua
 -- The round icon on the minimap (left click: settings window)
--- and the settings window: switches for the parts of this UI, size, moving frames, reset.
+-- and the settings window, in the style of the hero panel: a list of pages on the left (Interface, Nameplates, Damage, Map &
+-- Guardians, Utility), the switches of the page in titled panels on the right, size / unlock / reset under Interface.
 
 local G = AZSGW2;
 
-local ROWH = 20;
+local W, H = 620, 332;
+local NAVW = 142;
+local TOP = 48;                     -- under the title line
+local PAGEX = 166;                  -- left edge of the page area
+local PAGEW = W - PAGEX - 14;
+local PAGEH = H - TOP - 14;
+local ROWH = 24;
+local SECHEAD = 34;                 -- the title of a panel and the line under it
 
 ------------------------------------------------------------------------ options
 
@@ -19,56 +27,6 @@ function G.SetScaleAll(s)
 	end
 end
 
--- what each switch is called, reads and does. messages keeps its old saved name: true means "show the game's own".
-local ROWS = {
-	{ label = "Damage numbers (GW2 style)", get = function() return G.Opt("dmg"); end,
-		set = function(v) G.SetOpt("dmg", v); G.ApplyDamage(); end },
-	{ label = "   only critical hits", get = function() return G.Opt("dmgCrit"); end,
-		set = function(v) G.SetOpt("dmgCrit", v); end },
-	{ label = "   damage over time ticks", get = function() return G.Opt("dmgTicks"); end,
-		set = function(v) G.SetOpt("dmgTicks", v); end },
-	{ label = "   also from pets and summons", get = function() return G.Opt("dmgPet"); end,
-		set = function(v) G.SetOpt("dmgPet", v); end },
-	{ label = "Game's own damage numbers", get = function() return G.Opt("dmgNative"); end,
-		set = function(v) G.SetOpt("dmgNative", v); G.ApplyDamage(); end },
-	{ label = "GW2 minimap", get = function() return G.Opt("minimap"); end,
-		set = function(v) G.SetOpt("minimap", v); G.ApplyMinimap(); end },
-	{ label = "   caches on the minimap", get = function() return G.Opt("pinChest"); end,
-		set = function(v) G.SetOpt("pinChest", v); end },
-	{ label = "   guardians on the minimap", get = function() return G.Opt("pinGuard"); end,
-		set = function(v) G.SetOpt("pinGuard", v); end },
-	{ label = "Guardian list", get = function() return G.Opt("guardians"); end,
-		set = function(v) G.SetOpt("guardians", v); end },
-	{ label = "   direction arrows", get = function() return G.Opt("arrows"); end,
-		set = function(v) G.SetOpt("arrows", v); end },
-	{ label = "Target bar", get = function() return G.Opt("target"); end,
-		set = function(v) G.SetOpt("target", v); end },
-	{ label = "Party frames", get = function() return G.Opt("party"); end,
-		set = function(v) G.SetOpt("party", v); end },
-	{ label = "Ally down alert + arrow", get = function() return G.Opt("revive"); end,
-		set = function(v) G.SetOpt("revive", v); end },
-	{ label = "GW2 character panel", get = function() return G.Opt("charPanel"); end,
-		set = function(v) G.SetOpt("charPanel", v); end },
-	{ label = "Enable nameplates", get = function() return G.Opt("nameplates"); end,
-		set = function(v) G.SetPlateOpt("nameplates", v); end },
-	{ label = "   only elites and guardians", get = function() return G.Opt("platesElite"); end,
-		set = function(v) G.SetPlateOpt("platesElite", v); end },
-	{ label = "Enable friendly nameplates", get = function() return G.Opt("platesFriend"); end,
-		set = function(v) G.SetPlateOpt("platesFriend", v); end },
-	{ label = "   show pets and summons", get = function() return G.Opt("friendPets"); end,
-		set = function(v) G.SetOpt("friendPets", v); end },
-	{ label = "   hide totems", get = function() return not G.Opt("friendTotems"); end,
-		set = function(v) G.SetOpt("friendTotems", not v); end },
-	{ label = "Mark the party in co-op games", get = function() return G.Opt("markAllies"); end,
-		set = function(v) G.SetOpt("markAllies", v); end },
-	{ label = "Max targets, on the skills", get = function() return G.Opt("hits"); end,
-		set = function(v) G.SetOpt("hits", v); end },
-	{ label = "Damage meter", get = function() return G.Opt("meter"); end,
-		set = function(v) G.SetOpt("meter", v); end },
-	{ label = "Game's centre-screen messages", get = function() return AZSGW2DB.messages and true or false; end,
-		set = function(v) G.SetMessages(v); end },
-};
-
 -- the nameplate options: the GW2 nameplates (Plates.lua) on the game's own plates, which are switched to match
 function G.SetPlateOpt(key, on)
 	G.SetOpt(key, on);
@@ -80,39 +38,165 @@ function G.SetMessages(on)
 	G.QuietMessages(not on);
 end
 
+-- a switch of a saved option: what it is called, what it says when the mouse is on it, how it reads and sets the option.
+-- sub = a part of the switch above it (drawn indented, and dim while that one is off); needs = a function that says whether
+-- the option does anything at the moment (the row is dim when it does not, but it can still be switched).
+local function Opt(label, tip, key, after)
+	return { label = label, tip = tip,
+		get = function() return G.Opt(key); end,
+		set = function(v) G.SetOpt(key, v); if ( after ) then after(v); end end };
+end
+
+local function PlateOpt(label, tip, key)
+	return { label = label, tip = tip,
+		get = function() return G.Opt(key); end,
+		set = function(v) G.SetPlateOpt(key, v); end };
+end
+
+-- the pages: { name, sections = { { title, rows } } }. A section with layout = true holds the size / unlock / reset controls.
+local PAGES = {
+	{ name = "Interface", sections = {
+		{ title = "Frames", rows = {
+			Opt("Target bar", "A wide bar with the name and the health of your target, at the top of the screen.", "target"),
+			Opt("Party frames", "Health, barrier and buffs of your friends in a co-op game.", "party"),
+			Opt("GW2 character panel", "The hero panel opens in place of the game's character window. The game's own window still opens for its other tabs.", "charPanel"),
+		} },
+		{ title = "Layout", layout = true },
+	} },
+	{ name = "Nameplates", sections = {
+		{ title = "Enemies", rows = {
+			PlateOpt("Enable nameplates", "GW2 style nameplates above the enemies, in place of the game's own.", "nameplates"),
+			PlateOpt("Only elites and guardians", "Plates only for elites, guardians and bosses.", "platesElite"),
+		} },
+		{ title = "Friends", rows = {
+			PlateOpt("Enable friendly nameplates", "Plates above your friends, with health and, where the game says it, mana.", "platesFriend"),
+			Opt("Show pets and summons", "Friendly plates for pets and summoned creatures too.", "friendPets"),
+			{ label = "Hide totems", tip = "No friendly plates for totems.",
+				get = function() return not G.Opt("friendTotems"); end,
+				set = function(v) G.SetOpt("friendTotems", not v); end },
+		} },
+	} },
+	{ name = "Damage", sections = {
+		{ title = "Damage numbers", rows = {
+			Opt("GW2 style damage numbers", "Your hits as GW2 style numbers rising from the enemy.", "dmg", function() G.ApplyDamage(); end),
+			Opt("Only critical hits", "Show the numbers of critical hits only.", "dmgCrit"),
+			Opt("Damage over time ticks", "Show the ticks of damage over time effects too.", "dmgTicks"),
+			Opt("Also from pets and summons", "Show what your pets and summons deal too.", "dmgPet"),
+			Opt("The game's own damage numbers", "Keep the game's own numbers over the enemies' heads as well.", "dmgNative", function() G.ApplyDamage(); end),
+		} },
+		{ title = "Meter", rows = {
+			Opt("Damage meter", "Who dealt how much: the list at the side of the screen.", "meter"),
+		} },
+	} },
+	{ name = "Map & Guardians", sections = {
+		{ title = "Minimap", rows = {
+			Opt("GW2 minimap", "The round GW2 minimap in place of the game's.", "minimap", function() G.ApplyMinimap(); end),
+			Opt("Caches on the minimap", "A pin for every cache that waits for you.", "pinChest"),
+			Opt("Guardians on the minimap", "A pin for every guardian and its lair.", "pinGuard"),
+		} },
+		{ title = "Guardians", rows = {
+			Opt("Guardian list", "The list of guardians and their lairs at the side of the screen.", "guardians"),
+			Opt("Direction arrows", "An arrow beside each guardian that points the way to it.", "arrows"),
+			Opt("Health bars on the list", "The health of a guardian that fights is a bar with its percent under its name on the list, and no longer on the boss bar at the top. One or the other, never both. Needs the guardian list.", "guardianBars"),
+		} },
+	} },
+	{ name = "Utility", sections = {
+		{ title = "Co-op", rows = {
+			Opt("Ally down alert + arrow", "When a friend falls: a message with an arrow and the distance, and a marker over the body.", "revive"),
+			Opt("Mark the party in co-op games", "Puts the game's raid icons on the friends (and you) when you join. Needs the leader or a solo game.", "markAllies"),
+		} },
+		{ title = "Skills", rows = {
+			Opt("Max targets, on the skills", "The most enemies a skill can hit, on its icon.", "hits"),
+		} },
+		{ title = "Game", rows = {
+			{ label = "The game's centre-screen messages", tip = "The game's own big messages in the middle of the screen (off by default: the banners of this UI say the same).",
+				get = function() return AZSGW2DB.messages and true or false; end,
+				set = function(v) G.SetMessages(v); end },
+		} },
+	} },
+};
+
+-- the rows that are a part of another switch, and when that one does nothing
+local DEPENDS = {
+	["Only elites and guardians"] = function() return G.Opt("nameplates"); end,
+	["Show pets and summons"] = function() return G.Opt("platesFriend"); end,
+	["Hide totems"] = function() return G.Opt("platesFriend"); end,
+	["Only critical hits"] = function() return G.Opt("dmg"); end,
+	["Damage over time ticks"] = function() return G.Opt("dmg"); end,
+	["Also from pets and summons"] = function() return G.Opt("dmg"); end,
+	["Caches on the minimap"] = function() return G.Opt("minimap"); end,
+	["Guardians on the minimap"] = function() return G.Opt("minimap"); end,
+	["Direction arrows"] = function() return G.Opt("guardians"); end,
+	["Health bars on the list"] = function() return G.Opt("guardians"); end,
+};
+local SUBS = {
+	["Only elites and guardians"] = true, ["Show pets and summons"] = true, ["Hide totems"] = true,
+	["Only critical hits"] = true, ["Damage over time ticks"] = true, ["Also from pets and summons"] = true,
+	["Caches on the minimap"] = true, ["Guardians on the minimap"] = true,
+	["Direction arrows"] = true, ["Health bars on the list"] = true,
+};
+
 ------------------------------------------------------------------------ window
 
-local function NewCheck(parent, row, y)
+local function NewCheck(parent, row, x, y, w)
 	local b = CreateFrame("Button", nil, parent);
-	b:SetWidth(268);
+	b:SetWidth(w);
 	b:SetHeight(ROWH - 2);
-	b:SetPoint("TOPLEFT", parent, "TOPLEFT", 16, y);
+	b:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y);
+	local hl = b:CreateTexture(nil, "HIGHLIGHT");
+	hl:SetTexture(G.WHITE);
+	hl:SetVertexColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 0.07);
+	hl:SetAllPoints(b);
 	local box = CreateFrame("Frame", nil, b);
-	box:SetWidth(14);
-	box:SetHeight(14);
-	box:SetPoint("LEFT", b, "LEFT", 0, 0);
-	local bg = G.Solid(box, "BACKGROUND", 0.03, 0.03, 0.04, 1);
+	box:SetWidth(16);
+	box:SetHeight(16);
+	box:SetPoint("LEFT", b, "LEFT", 4, 0);
+	local bg = G.Solid(box, "BACKGROUND", 0.02, 0.02, 0.03, 1);
 	bg:SetAllPoints(box);
 	G.Edges(box, G.GOLD[1], G.GOLD[2], G.GOLD[3], 1, 1, "BORDER");
 	local mark = G.Solid(box, "ARTWORK", G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 1);
 	mark:SetPoint("TOPLEFT", box, "TOPLEFT", 3, -3);
 	mark:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -3, 3);
 	b.mark = mark;
-	local t = G.Text(b, 11, "LEFT");
-	t:SetPoint("LEFT", b, "LEFT", 20, 0);
-	t:SetText(row.label);
+	b.box = box;
+	b.text = G.TextS(b, 12, "LEFT");
+	b.text:SetPoint("LEFT", b, "LEFT", 28, 0);
+	b.text:SetText(row.label);
 	b.row = row;
 	b.Refresh = function(self)
-		if ( self.row.get() ) then
+		local on = self.row.get() and true or false;
+		if ( on ) then
 			self.mark:Show();
 		else
 			self.mark:Hide();
 		end
+		-- a part of another switch is dim while that one is off (it can still be switched)
+		local live = true;
+		local need = DEPENDS[self.row.label];
+		if ( need ) then
+			live = need() and true or false;
+		end
+		if ( self.live ~= live ) then
+			self.live = live;
+			if ( live ) then
+				self.text:SetTextColor(0.93, 0.93, 0.95);
+				self.mark:SetVertexColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 1);
+			else
+				self.text:SetTextColor(0.52, 0.52, 0.56);
+				self.mark:SetVertexColor(0.55, 0.50, 0.36, 1);
+			end
+		end
 	end;
 	b:SetScript("OnClick", function()
 		b.row.set(not b.row.get());
-		b:Refresh();
+		G.RefreshSettings();
 	end);
+	G.Tooltip(b, function(tt)
+		tt:AddLine(b.row.label, G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+		if ( b.row.tip ) then
+			tt:AddLine(b.row.tip, 0.82, 0.82, 0.86, 1);
+		end
+	end, "ANCHOR_RIGHT");
 	return b;
 end
 
@@ -135,12 +219,96 @@ local function NewButton(parent, text, w, point, x, y, onClick)
 	return b;
 end
 
+-- a titled panel of the page: the title in gold with a line under it, like "Attributes" in the hero panel
+local function NewSection(page, title, y, height)
+	local p = CreateFrame("Frame", nil, page);
+	p:SetPoint("TOPLEFT", page, "TOPLEFT", 0, -y);
+	p:SetWidth(PAGEW);
+	p:SetHeight(height);
+	G.Panel(p, 0.5);
+	local t = G.Text(p, 13, "LEFT");
+	t:SetPoint("TOPLEFT", p, "TOPLEFT", 12, -9);
+	t:SetText(title);
+	t:SetTextColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+	local line = G.Band(p, "ARTWORK", G.GOLD[1], G.GOLD[2], G.GOLD[3], 0.8);
+	line:SetPoint("TOPLEFT", p, "TOPLEFT", 10, -28);
+	line:SetPoint("TOPRIGHT", p, "TOPRIGHT", -10, -28);
+	line:SetHeight(1);
+	return p;
+end
+
+local LAYOUTH = SECHEAD + 36 + 32 + 40;
+
+-- size, unlock and reset (the page "Interface")
+local function BuildLayout(f, panel)
+	local st = G.TextS(panel, 12, "LEFT");
+	st:SetPoint("TOPLEFT", panel, "TOPLEFT", 14, -SECHEAD - 9);
+	st:SetText("Size of everything");
+	st:SetTextColor(0.93, 0.93, 0.95);
+	f.scaleText = G.Text(panel, 11, "CENTER");
+	f.scaleText:SetPoint("TOPLEFT", panel, "TOPLEFT", 190, -SECHEAD - 9);
+	f.scaleText:SetWidth(50);
+	local function Step(d)
+		G.SetScaleAll(math.floor((AZSGW2DB.scale + d) * 100 + 0.5) / 100);
+		f.scaleText:SetText(string.format("%d%%", math.floor(AZSGW2DB.scale * 100 + 0.5)));
+	end
+	NewButton(panel, "-", 22, "TOPLEFT", 164, -SECHEAD - 5, function() Step(-0.05); end);
+	NewButton(panel, "+", 22, "TOPLEFT", 244, -SECHEAD - 5, function() Step(0.05); end);
+	f.unlock = NewButton(panel, "Unlock layout", 150, "TOPLEFT", 14, -SECHEAD - 36 - 2, function()
+		G.ToggleUnlock();
+	end);
+	NewButton(panel, "Reset positions", 150, "TOPLEFT", 172, -SECHEAD - 36 - 2, function()
+		G.ResetPositions();
+	end);
+	local hint = G.Text(panel, 9, "LEFT");
+	hint:SetPoint("TOPLEFT", panel, "TOPLEFT", 14, -SECHEAD - 36 - 32);
+	hint:SetWidth(PAGEW - 28);
+	hint:SetHeight(24);
+	hint:SetTextColor(0.65, 0.65, 0.68);
+	hint:SetText("Unlocked: drag a gold box to move it, its corner or the mouse wheel to resize it, right click puts its size back.");
+	f.hint = hint;
+end
+
+local function NewTab(nav, name, i, onClick)
+	local t = CreateFrame("Button", nil, nav);
+	t:SetWidth(NAVW - 12);
+	t:SetHeight(30);
+	t:SetPoint("TOPLEFT", nav, "TOPLEFT", 6, -8 - ( i - 1 ) * 33);
+	local hl = t:CreateTexture(nil, "HIGHLIGHT");
+	hl:SetTexture(G.WHITE);
+	hl:SetVertexColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 0.07);
+	hl:SetAllPoints(t);
+	t.back = G.Solid(t, "BACKGROUND", G.GOLD[1], G.GOLD[2], G.GOLD[3], 0.20);
+	t.back:SetAllPoints(t);
+	t.back:Hide();
+	t.stripe = G.Solid(t, "ARTWORK", G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 1);
+	t.stripe:SetPoint("TOPLEFT", t, "TOPLEFT", 0, 0);
+	t.stripe:SetPoint("BOTTOMLEFT", t, "BOTTOMLEFT", 0, 0);
+	t.stripe:SetWidth(3);
+	t.stripe:Hide();
+	t.text = G.Text(t, 12, "LEFT");
+	t.text:SetPoint("LEFT", t, "LEFT", 14, 0);
+	t.text:SetText(name);
+	t.Select = function(self, on)
+		if ( on ) then
+			self.back:Show();
+			self.stripe:Show();
+			self.text:SetTextColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
+		else
+			self.back:Hide();
+			self.stripe:Hide();
+			self.text:SetTextColor(0.80, 0.80, 0.84);
+		end
+	end;
+	t:Select(false);
+	t:SetScript("OnClick", onClick);
+	return t;
+end
+
 function G.BuildSettings()
-	local nrows = table.getn(ROWS);
-	local w, h = 300, 78 + nrows * ROWH + 74;
 	local f = CreateFrame("Frame", "AZSGW2Settings", UIParent);
-	f:SetWidth(w);
-	f:SetHeight(h);
+	f:SetWidth(W);
+	f:SetHeight(H);
 	f:SetPoint("CENTER", UIParent, "CENTER", 0, 40);
 	f:SetFrameStrata("DIALOG");
 	f:SetMovable(true);
@@ -153,66 +321,122 @@ function G.BuildSettings()
 		f:StopMovingOrSizing();
 	end);
 	f:Hide();
-	local bg = G.Solid(f, "BACKGROUND", 0.04, 0.04, 0.05, 0.96);
+	local bg = G.Solid(f, "BACKGROUND", 0.04, 0.04, 0.05, 0.97);
 	bg:SetAllPoints(f);
 	G.Frame9(f, "BORDER");
 	G.settings = f;
 	f.azs = true;               -- the popup hunter never looks inside this window
 
-	local title = G.Text(f, 14, "CENTER");
-	title:SetPoint("TOP", f, "TOP", 0, -14);
+	local title = G.Text(f, 15, "LEFT");
+	title:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -14);
 	title:SetText("AZS GW2 UI");
 	title:SetTextColor(G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
-	local line = G.Band(f, "ARTWORK", G.GOLD[1], G.GOLD[2], G.GOLD[3], 0.95);
-	line:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -34);
-	line:SetPoint("TOPRIGHT", f, "TOPRIGHT", -10, -34);
+	local sub = G.TextS(f, 11, "LEFT");
+	sub:SetPoint("LEFT", title, "RIGHT", 10, -1);
+	sub:SetText("Settings");
+	sub:SetTextColor(0.62, 0.62, 0.66);
+	local line = G.Band(f, "ARTWORK", G.GOLD[1], G.GOLD[2], G.GOLD[3], 0.9);
+	line:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -38);
+	line:SetPoint("TOPRIGHT", f, "TOPRIGHT", -12, -38);
 	line:SetHeight(1);
 
-	local close = CreateFrame("Button", nil, f);
-	close:SetWidth(18);
-	close:SetHeight(18);
-	close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -10, -10);
-	local ct = G.Text(close, 13, "CENTER");
-	ct:SetPoint("CENTER", close, "CENTER", 0, 0);
-	ct:SetText("x");
-	close:SetScript("OnClick", function()
+	local x = CreateFrame("Button", nil, f);
+	x:SetWidth(22);
+	x:SetHeight(22);
+	x:SetPoint("TOPRIGHT", f, "TOPRIGHT", -12, -10);
+	local xbg = G.Solid(x, "BACKGROUND", 0.10, 0.09, 0.10, 0.95);
+	xbg:SetAllPoints(x);
+	G.Edges(x, 0.55, 0.46, 0.30, 1, 1, "BORDER");
+	local xt = G.Text(x, 13, "CENTER");
+	xt:SetPoint("CENTER", x, "CENTER", 0, 0);
+	xt:SetText("x");
+	x:SetScript("OnClick", function()
 		f:Hide();
 	end);
+	x:SetScript("OnEnter", function()
+		xbg:SetVertexColor(0.30, 0.10, 0.10, 0.95);
+	end);
+	x:SetScript("OnLeave", function()
+		xbg:SetVertexColor(0.10, 0.09, 0.10, 0.95);
+	end);
+
+	-- the pages, listed on the left
+	local nav = CreateFrame("Frame", nil, f);
+	nav:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -TOP);
+	nav:SetWidth(NAVW);
+	nav:SetHeight(PAGEH);
+	G.Panel(nav, 0.5);
+	local ver = G.TextS(nav, 10, "CENTER");
+	ver:SetPoint("BOTTOM", nav, "BOTTOM", 0, 10);
+	ver:SetTextColor(0.5, 0.5, 0.54);
+	local v = GetAddOnMetadata and GetAddOnMetadata("AZSGW2UI", "Version");
+	ver:SetText(v and ( "version " .. tostring(v) ) or "");
 
 	f.checks = {};
-	for i = 1, nrows do
-		f.checks[i] = NewCheck(f, ROWS[i], -44 - (i - 1) * ROWH);
+	f.pages = {};
+	f.tabs = {};
+	for i = 1, table.getn(PAGES) do
+		local def = PAGES[i];
+		f.tabs[i] = NewTab(nav, def.name, i, function()
+			G.SettingsPage(i);
+		end);
+		local page = CreateFrame("Frame", nil, f);
+		page:SetPoint("TOPLEFT", f, "TOPLEFT", PAGEX, -TOP);
+		page:SetWidth(PAGEW);
+		page:SetHeight(PAGEH);
+		page:Hide();
+		local y = 0;
+		for k = 1, table.getn(def.sections) do
+			local sec = def.sections[k];
+			local height;
+			if ( sec.layout ) then
+				height = LAYOUTH;
+			else
+				height = SECHEAD + table.getn(sec.rows) * ROWH + 6;
+			end
+			local panel = NewSection(page, sec.title, y, height);
+			if ( sec.layout ) then
+				BuildLayout(f, panel);
+			else
+				for r = 1, table.getn(sec.rows) do
+					local row = sec.rows[r];
+					local indent = SUBS[row.label] and 22 or 0;
+					local c = NewCheck(panel, row, 10 + indent, -SECHEAD - ( r - 1 ) * ROWH, PAGEW - 20 - indent);
+					c.page = i;
+					table.insert(f.checks, c);
+				end
+			end
+			y = y + height + 8;
+		end
+		f.pages[i] = page;
 	end
-
-	-- size
-	local sy = -44 - nrows * ROWH - 8;
-	local st = G.Text(f, 11, "LEFT");
-	st:SetPoint("TOPLEFT", f, "TOPLEFT", 16, sy - 4);
-	st:SetText("Size");
-	f.scaleText = G.Text(f, 11, "CENTER");
-	f.scaleText:SetPoint("TOPLEFT", f, "TOPLEFT", 100, sy - 4);
-	f.scaleText:SetWidth(50);
-	local function Step(d)
-		G.SetScaleAll(math.floor((AZSGW2DB.scale + d) * 100 + 0.5) / 100);
-		f.scaleText:SetText(string.format("%d%%", math.floor(AZSGW2DB.scale * 100 + 0.5)));
+	f.page = 1;
+	f:SetScript("OnShow", function()
+		G.SettingsPage(f.page);
+	end);
+	if ( UISpecialFrames ) then
+		table.insert(UISpecialFrames, "AZSGW2Settings");
 	end
-	NewButton(f, "-", 22, "TOPLEFT", 70, sy, function() Step(-0.05); end);
-	NewButton(f, "+", 22, "TOPLEFT", 158, sy, function() Step(0.05); end);
+end
 
-	-- move / reset / close
-	f.unlock = NewButton(f, "Unlock layout", 126, "BOTTOMLEFT", 16, 14, function()
-		G.ToggleUnlock();
-	end);
-	NewButton(f, "Reset positions", 126, "BOTTOMRIGHT", -16, 14, function()
-		G.ResetPositions();
-	end);
-	local hint = G.Text(f, 9, "CENTER");
-	hint:SetPoint("BOTTOM", f, "BOTTOM", 0, 42);
-	hint:SetWidth(w - 30);
-	hint:SetHeight(24);
-	hint:SetTextColor(0.65, 0.65, 0.65);
-	hint:SetText("Unlocked: drag a gold box to move it, its corner or the mouse wheel to resize it, right click puts its size back.");
-	f.hint = hint;
+-- shows one page (and remembers it for the next time the window opens)
+function G.SettingsPage(i)
+	local f = G.settings;
+	if ( not f or not f.pages ) then
+		return;
+	end
+	if ( not f.pages[i] ) then
+		i = 1;
+	end
+	f.page = i;
+	for k = 1, table.getn(f.pages) do
+		if ( k == i ) then
+			f.pages[k]:Show();
+		else
+			f.pages[k]:Hide();
+		end
+		f.tabs[k]:Select(k == i);
+	end
 end
 
 function G.RefreshSettings()

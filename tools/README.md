@@ -7,12 +7,13 @@ and to regenerate its art without the game.
 
     AZSGW2UI/             the addon: every file the game needs, and nothing else. The release zip is exactly this folder.
       AZSGW2UI.toc, *.lua
-      Textures/, Fonts/
+      Textures/, Fonts/, Sounds/
     README.md, CHANGELOG.md   documentation: not in the zip
     tools/                this folder: not in the zip
       harness.lua         strict WoW 1.12 / Lua 5.0 mock + test scenarios (no game needed)
       run_lua.py          runs a Lua file with the system liblua (see below)
       make_textures.py    draws every texture in AZSGW2UI/Textures (pure Python + numpy + Pillow)
+      make_sounds.py      writes the one sound file in AZSGW2UI/Sounds from scratch (numpy + scipy, ffmpeg for the mp3)
       render_layout.py    turns a layout dump of the harness into a PNG preview
     .github/workflows/release.yml   the Release workflow (Actions tab > Release > Run workflow)
     .gitattributes        line-ending rules for textures and fonts

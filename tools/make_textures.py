@@ -924,6 +924,37 @@ def plate_fill(name="plate_fill.tga", w=64, h=32):
     write_tga(name, rgba)
 
 
+# ---------------------------------------------------------------- 1.10.0: light beams (an easter egg's)
+def rave_beams(name="rave_beam.tga", cells=8, cell=64):
+    """64 cells (8 x 8, 64 px each) of one soft white light beam that starts in the middle of the cell and goes outwards; cell k
+    points k * 360 / 64 degrees clockwise from straight up. The addon turns a beam by picking the cell (this client cannot
+    turn a texture) and tints it with the vertex colour. The beam fades out before the edge of the cell, so the cells do
+    not bleed into each other."""
+    n = cells * cells
+    atlas = np.zeros((cells * cell, cells * cell, 4))
+    c = (cell - 1) / 2.0
+    R = cell / 2.0 - 1.5
+    py, px = np.mgrid[0:cell, 0:cell].astype(np.float64)
+    dx, dy = px - c, c - py                      # y up
+    r = np.hypot(dx, dy)
+    for k in range(n):
+        th = k * 2 * math.pi / n
+        along = dx * math.sin(th) + dy * math.cos(th)
+        perp = dx * math.cos(th) - dy * math.sin(th)
+        phi = np.arctan2(perp, np.maximum(along, 1e-6))
+        phi = np.where(along > 0, phi, math.pi / 2)
+        core = 0.80 * np.exp(-(phi / math.radians(2.6)) ** 2) + 0.28 * np.exp(-(phi / math.radians(9.0)) ** 2)
+        length = clamp01(1.0 - r / R) ** 1.1
+        start = sstep(0.8, 5.0, r)
+        a = core * length * start
+        row, col = divmod(k, cells)
+        cell_rgba = np.ones((cell, cell, 4))
+        cell_rgba[..., 3] = clamp01(a)
+        atlas[row * cell:(row + 1) * cell, col * cell:(col + 1) * cell] = cell_rgba
+    write_tga(name, atlas)
+
+
+
 orb_fill()
 orb_gloss()
 orb_rim()
@@ -941,3 +972,4 @@ bar_gold()
 splat()
 stat_icons()
 plate_fill()
+rave_beams()

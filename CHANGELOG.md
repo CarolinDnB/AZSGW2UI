@@ -1,5 +1,18 @@
 # AZS GW2 UI: Changelog
 
+## 1.10.0
+
+**New**
+- **Health bars of guardians on the guardian list.** *Health bars on the list* (Map & Guardians): an awake guardian shows its health bar with the percent right under its own row on the guardian list, in the same flat style as the boss bar. It is one or the other: with the option on, the guardian is not on the boss bar at the top any more; with it off the list shows no bars and the boss bar works as before. Bosses stay on the boss bar either way. (The debuff icons of a guardian are only shown on the boss bar.)
+- **The settings window is rebuilt** as pages in the style of the hero panel: a list on the left (Interface, Nameplates, Damage, Map & Guardians, Utility) and framed groups of switches on the right (Frames, Layout, Enemies, Friends, Damage numbers, Meter, Minimap, Guardians, Co-op, Skills, Game). Same options as before, plus the new one above; a switch keeps its saved value.
+
+**Changed**
+- **The gear next to the spellbook and character buttons** (amulet, rings, trinkets) lost its window. They stand on their own like the F1 - F5 skills of Guild Wars 2: the amulet, the most important piece, a little bigger, a little more room after it, then the rings, then the trinkets. Only the pieces you wear are drawn.
+- **The command that lists what the client says about each friend (for the barrier) is now `/gw2 partyinfo`.**
+
+**Fixed**
+- **The stats row under the run bar sat to the left of the bar's middle.** The three cells (kills, gold, cache) are the same width now and each is centred in its third, so the row is even under the bar. It no longer shifts when a number gets longer.
+
 ## 1.9.2
 
 **Changed**
@@ -96,5 +109,5 @@
 
 ## Good to know
 
-- The game only reports the shield amount for your own hero. For friends the barrier is read from their health above the maximum, or from a shield buff on them. `/gw2 party` shows what the game tells the addon.
+- The game only reports the shield amount for your own hero. For friends the barrier is read from their health above the maximum, or from a shield buff on them. `/gw2 partyinfo` shows what the game tells the addon.
 - All of this was tested in a simulated game client, not in the real game. If something looks wrong in game, `/gw2 debug` and a screenshot help most.

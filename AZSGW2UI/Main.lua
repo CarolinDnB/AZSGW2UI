@@ -260,6 +260,8 @@ function G.Start()
 	AddUpdater("arrows", G.UpdateGuardianArrows, 0.05);
 	AddUpdater("plates", G.UpdatePlates, 0.1, true);
 	AddUpdater("marks", G.UpdateMarks, 1, true);
+	AddUpdater("rave", G.UpdateRave, 0.5, true);
+	G.raveUpdater = G.updaters[table.getn(G.updaters)];
 
 	local driver = CreateFrame("Frame", "AZSGW2Driver", UIParent);
 	driver.azs = true;
@@ -320,7 +322,7 @@ local function Help()
 	G.Print("/gw2 messages on|off : the game's own centre-screen messages (off by default)");
 	G.Print("/gw2 dmg all | crits | off | ticks on | ticks off : damage numbers");
 	G.Print("/gw2 char [on|off] : open the character panel / use it instead of the game's window");
-	G.Print("/gw2 party : health and buffs of each friend as the client reports them (barrier check)");
+	G.Print("/gw2 partyinfo : health and buffs of each friend as the client reports them (barrier check)");
 	G.Print("/gw2 stats : every value of AZS_STATS (to check what the attributes show)");
 	G.Print("/gw2 hunt on|off : look for the game's own popup text on screen (stops itself when it finds none)");
 	G.Print("/gw2 debug : what is hidden, which bindings the buttons use");
@@ -567,6 +569,7 @@ function G.Slash(msg)
 
 	if ( cmd == "off" ) then
 		AZSGW2DB.enabled = false;
+		G.PartyStop(true);
 		G.SetUnlocked(false);
 		G.ApplyMinimap();
 		G.HideGameHud(false);
@@ -695,8 +698,10 @@ function G.Slash(msg)
 		if ( rest == "" ) then
 			G.Print("usage: /gw2 dmg all | crits | off | ticks on | ticks off");
 		end
-	elseif ( cmd == "party" ) then
+	elseif ( cmd == "partyinfo" ) then
 		G.PrintParty();
+	elseif ( cmd == "party" ) then
+		G.PartyCommand(rest);
 	elseif ( cmd == "stats" ) then
 		G.PrintStats();
 	elseif ( cmd == "char" or cmd == "character" ) then

@@ -1,8 +1,9 @@
 -- AZS GW2 UI: Skills.lua
 -- Six display-only skill slots (the spells cast themselves in Azeroth Survivors): three on each side of
 -- the orb, big and tight, each with a round rank chip. The racial sits left of the left three; Talents and
--- Character are two small buttons stacked right of the right three. A jewelry plate and the status
--- row (summons, totems) sit around them. Own art; the layout is inspired by GW2_UI.
+-- Character are two small buttons stacked right of the right three. The jewelry row (no plate: the amulet a little
+-- bigger, then the rings, then the trinkets, like the F1 - F5 skills of GW2) and the status row (summons, totems)
+-- sit around them. Own art; the layout is inspired by GW2_UI.
 
 local G = AZSGW2;
 
@@ -14,6 +15,10 @@ local SIDE = 6;           -- room between the orb's rim and the nearest slot
 local LIFT = 4;           -- slots stand this far above the bottom of the orb
 local OUTER = 8;          -- gap before the racial / the small buttons
 local WINGH = SLOT + 24;  -- height of the smoke behind each side
+local AMULET = 38;     -- the jewelry row: the amulet is the most important piece, a little bigger than the rest
+local JEWEL = 31;      -- rings and trinkets
+local JEWGAP = 3;
+local AMULETGAP = 7;   -- a little more room after the amulet
 local AURAS = 10;      -- buffs / debuffs shown, one row each
 local AURASIZE = 26;
 local STATUS = 12;     -- summons and totems: two rows of six
@@ -97,6 +102,23 @@ end
 
 ------------------------------------------------------------------------ one slot
 
+-- the frame of a slot: a black outline, a two pixel steel bevel (light on top and left), a soft shadow on the icon
+local function Bevel(b)
+	G.Edges(b, 0.02, 0.02, 0.03, 1, 1, "ARTWORK");
+	local bev = CreateFrame("Frame", nil, b);
+	bev:SetPoint("TOPLEFT", b, "TOPLEFT", 1, -1);
+	bev:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -1, 1);
+	local e = G.Edges(bev, 0.6, 0.6, 0.64, 1, 2, "ARTWORK");
+	e.top:SetVertexColor(0.78, 0.78, 0.82, 1);
+	e.left:SetVertexColor(0.64, 0.64, 0.68, 1);
+	e.bottom:SetVertexColor(0.27, 0.27, 0.31, 1);
+	e.right:SetVertexColor(0.33, 0.33, 0.37, 1);
+	local shade = CreateFrame("Frame", nil, b);
+	shade:SetPoint("TOPLEFT", b, "TOPLEFT", 3, -3);
+	shade:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -3, 3);
+	G.Edges(shade, 0, 0, 0, 0.55, 1, "ARTWORK");
+end
+
 local function NewSlot(size, hasCooldown, ranked)
 	local b = CreateFrame("Button", nil, UIParent);
 	b:SetWidth(size);
@@ -124,20 +146,7 @@ local function NewSlot(size, hasCooldown, ranked)
 		b.cd = cd;
 	end
 
-	-- frame: a black outline, a two pixel steel bevel (light on top and left), a soft shadow on the icon
-	G.Edges(b, 0.02, 0.02, 0.03, 1, 1, "ARTWORK");
-	local bev = CreateFrame("Frame", nil, b);
-	bev:SetPoint("TOPLEFT", b, "TOPLEFT", 1, -1);
-	bev:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -1, 1);
-	local e = G.Edges(bev, 0.6, 0.6, 0.64, 1, 2, "ARTWORK");
-	e.top:SetVertexColor(0.78, 0.78, 0.82, 1);
-	e.left:SetVertexColor(0.64, 0.64, 0.68, 1);
-	e.bottom:SetVertexColor(0.27, 0.27, 0.31, 1);
-	e.right:SetVertexColor(0.33, 0.33, 0.37, 1);
-	local shade = CreateFrame("Frame", nil, b);
-	shade:SetPoint("TOPLEFT", b, "TOPLEFT", 3, -3);
-	shade:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -3, 3);
-	G.Edges(shade, 0, 0, 0, 0.55, 1, "ARTWORK");
+	Bevel(b);
 
 	local tf = CreateFrame("Frame", nil, b);
 	tf:SetAllPoints(b);
@@ -926,39 +935,27 @@ function G.BuildSkills()
 	G.barBox = box;
 	G.Movable(orb, "orb", "Skill bar", box, box);
 
-	-- jewelry: a small steel plate right of the bar, 3 x 2 icons
-	local plate = CreateFrame("Frame", nil, UIParent);
-	plate:SetWidth(82);
-	plate:SetHeight(SLOT + 2);
-	plate:SetFrameStrata("MEDIUM");
-	plate:SetPoint("BOTTOMLEFT", ch, "BOTTOMRIGHT", 8, 0);
-	plate:Hide();
-	local pbg = G.Solid(plate, "BACKGROUND", 0.05, 0.05, 0.06, 0.92);
-	pbg:SetAllPoints(plate);
-	G.Frame9(plate, "BORDER");
-	G.Register(plate, true);
-	G.jewPlate = plate;
+	-- jewelry: no plate, just the pieces in a row right of the Character button, like the F1 - F5 skills of GW2: the amulet
+	-- first and a little bigger, then the rings, then the trinkets (UpdateJewelry puts them in that order)
 	G.jewSlots = {};
 	for i = 1, 6 do
 		local j = CreateFrame("Frame", nil, UIParent);
 		j.tipTag = "jewelry";
-		j:SetWidth(22);
-		j:SetHeight(22);
+		j:SetWidth(JEWEL);
+		j:SetHeight(JEWEL);
 		j:SetFrameStrata("MEDIUM");
-		j:SetFrameLevel(plate:GetFrameLevel() + 2);
-		local col, row = math.mod(i - 1, 3), math.floor((i - 1) / 3);
-		j:SetPoint("TOPLEFT", plate, "TOPLEFT", 6 + col * 24, -(5 + row * 24));
+		j:SetPoint("BOTTOMLEFT", ch, "BOTTOMRIGHT", OUTER, 0);
 		local t = j:CreateTexture(nil, "BACKGROUND");
-		t:SetPoint("TOPLEFT", j, "TOPLEFT", 2, -2);
-		t:SetPoint("BOTTOMRIGHT", j, "BOTTOMRIGHT", -2, 2);
+		t:SetPoint("TOPLEFT", j, "TOPLEFT", 3, -3);
+		t:SetPoint("BOTTOMRIGHT", j, "BOTTOMRIGHT", -3, 3);
 		t:SetTexCoord(0.07, 0.93, 0.07, 0.93);
 		j.icon = t;
-		G.Edges(j, 0.55, 0.55, 0.60, 1, 1, "ARTWORK");
+		Bevel(j);
 		G.Tooltip(j, function(tt)
 			if ( j.data ) then
 				tt:AddLine(j.data.name, G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3]);
 				if ( j.data.category ) then
-					tt:AddLine(tostring(j.data.category), 0.7, 0.7, 0.7);
+					tt:AddLine(Pretty(tostring(j.data.category)), 0.7, 0.7, 0.7);
 				end
 			end
 		end, "ANCHOR_TOP");
@@ -1634,30 +1631,72 @@ function G.TargetsReport()
 	end
 end
 
+-- the order of the jewelry row: amulet (necklace), rings, trinkets, anything else last
+local function JewelWeight(category)
+	local c = string.lower(tostring(category or ""));
+	if ( string.find(c, "amulet", 1, true) or string.find(c, "neck", 1, true) or string.find(c, "pendant", 1, true) ) then
+		return 1;
+	elseif ( string.find(c, "ring", 1, true) ) then
+		return 2;
+	elseif ( string.find(c, "trinket", 1, true) ) then
+		return 3;
+	end
+	return 4;
+end
+
 function G.UpdateJewelry(dt)
 	if ( not G.jewSlots ) then
 		return;
 	end
 	G.RefreshLoadout();
 	local jew = G.jewelry or {};
-	if ( G.jewPlate ) then
-		if ( G.shown and table.getn(jew) > 0 ) then
-			G.jewPlate:Show();
-		else
-			G.jewPlate:Hide();
-		end
+	local sorted = {};
+	for i = 1, table.getn(jew) do
+		table.insert(sorted, { d = jew[i], w = JewelWeight(jew[i].category), i = i });
 	end
+	table.sort(sorted, function(a, b)
+		if ( a.w ~= b.w ) then
+			return a.w < b.w;
+		end
+		return a.i < b.i;
+	end);
+	local prev = nil;
 	for i = 1, 6 do
 		local j = G.jewSlots[i];
-		local d = jew[i];
-		if ( d and G.shown ) then
+		local e = sorted[i];
+		if ( e and G.shown ) then
+			local d = e.d;
 			j.data = d;
-			j.icon:SetTexture(d.icon or G.QUESTION);
-			j.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93);
-			j:Show();
+			local icon = d.icon or G.QUESTION;
+			if ( j.cIcon ~= icon ) then
+				j.cIcon = icon;
+				j.icon:SetTexture(icon);
+				j.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93);
+			end
+			-- the size and the place only change when the pieces do (the amulet is bigger; the others follow it in a row)
+			local size = ( e.w == 1 ) and AMULET or JEWEL;
+			local after = prev and prev.w == 1 and AMULETGAP or JEWGAP;
+			if ( j.curSize ~= size ) then
+				j.curSize = size;
+				j:SetWidth(size);
+				j:SetHeight(size);
+			end
+			local before = prev and prev.slot or nil;
+			if ( j.curPrev ~= before or j.curGap ~= after ) then
+				j.curPrev, j.curGap = before, after;
+				j:ClearAllPoints();
+				if ( before ) then
+					j:SetPoint("BOTTOMLEFT", before, "BOTTOMRIGHT", after, 0);
+				else
+					j:SetPoint("BOTTOMLEFT", G.charBtn, "BOTTOMRIGHT", OUTER, 0);
+				end
+			end
+			G.Vis(j, true);
+			prev = { slot = j, w = e.w };
 		else
 			j.data = nil;
-			j:Hide();
+			j.curPrev = nil;
+			G.Vis(j, false);
 		end
 	end
 end
