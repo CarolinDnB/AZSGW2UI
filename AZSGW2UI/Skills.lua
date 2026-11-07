@@ -2,8 +2,9 @@
 -- Six display-only skill slots (the spells cast themselves in Azeroth Survivors): three on each side of
 -- the orb, big and tight, each with a round rank chip. The racial sits left of the left three; Talents and
 -- Character are two small buttons stacked right of the right three. The accessories (no plate: the amulet a little
--- bigger, then the rings, then the trinkets, like the F1 - F5 skills of GW2) stand in a row above the left three skills and
--- can be moved on their own; the status row (summons, totems) sits above them. Own art; the layout is inspired by GW2_UI.
+-- bigger, then the rings, then the trinkets, like the F1 - F5 skills of GW2) stand in a row above the left three skills,
+-- lined up with the first one, and can be moved on their own; the status row (summons, totems) is one row under the left
+-- skills, next to the resource bar. Own art; the layout is inspired by GW2_UI.
 
 local G = AZSGW2;
 
@@ -15,17 +16,19 @@ local SIDE = 6;           -- room between the orb's rim and the nearest slot
 local LIFT = 4;           -- slots stand this far above the bottom of the orb
 local OUTER = 8;          -- gap before the racial / the small buttons
 local WINGH = SLOT + 24;  -- height of the smoke behind each side
-local AMULET = 38;     -- the jewelry row: the amulet is the most important piece, a little bigger than the rest
-local JEWEL = 31;      -- rings and trinkets
+local AMULET = 35;     -- the accessories: the amulet is the most important piece, a little bigger than the rest
+local JEWEL = 28;      -- rings and trinkets
 local JEWGAP = 3;
-local AMULETGAP = 7;   -- a little more room after the amulet
-local ACCY = 10;          -- the accessories stand this far above the left three skills (room for the targets chips)
-local ACCW = AMULET + AMULETGAP + 5 * JEWEL + 4 * JEWGAP;   -- all six pieces: 212 px, a little wider than the racial + left three
+local AMULETGAP = 6;   -- a little more room after the amulet
+local ACCY = 10;       -- the accessories stand this far above the left three skills (room for the targets chips)
+-- the five pieces a hero can wear (amulet, two rings, two trinkets) are as wide as the left three skills: 35 + 6 + 4 * 28 + 3 * 3 = 162
+local ACCW = 3 * SLOT + 2 * GAP;
 local AURAS = 10;      -- buffs / debuffs shown, one row each
 local AURASIZE = 26;
-local STATUS = 12;     -- summons and totems: two rows of six
+local STATUS = 12;     -- summons and totems: one row under the left skills, growing to the left
 local STATUSSIZE = 24;
-local STATUSROW = 6;   -- 6 x 24 + 5 x 2 = 154 px: as wide as the left three slots, so it never reaches the orb
+local STATUSX = 32;    -- the first one ends this far left of the third skill's right edge: 6 px clear of the resource bar under the orb (176 wide)
+local STATUSY = 9;     -- under the skills' rank chips
 
 G.slots = {};
 G.abilityInfo = {};
@@ -51,11 +54,21 @@ function G.RefreshLoadout()
 	if ( G.loadoutStamp == stamp ) then
 		return;
 	end
+	-- a loadout that is not complete yet is used, but read again a second later, whatever the revision says
+	local now = GetTime and GetTime() or 0;
+	if ( G.loadoutNext and now < G.loadoutNext ) then
+		return;
+	end
 	local lo = AZS_GetMeterLoadout({ apiVersion = 1, runId = ctx.runId });
 	if ( not lo ) then
 		return;
 	end
-	G.loadoutStamp = stamp;
+	if ( lo.complete == false ) then
+		G.loadoutNext = now + 1;
+	else
+		G.loadoutNext = nil;
+		G.loadoutStamp = stamp;
+	end
 
 	local info = {};
 	local iconNames, spellNames = {}, {};
@@ -86,6 +99,23 @@ function G.RefreshLoadout()
 	G.abilityInfo = info;
 	G.iconNames, G.spellNames = iconNames, spellNames;
 
+	-- where each worn piece sits (the loadout's equipment list names the item of every slot): an upgraded piece, which the game
+	-- gives another name and another item, is still found by this
+	local placeOf, placeOfSource = {}, {};
+	local equip = lo.equipment or {};
+	for i = 1, table.getn(equip) do
+		local e = equip[i];
+		if ( type(e) == "table" and e.occupied ) then
+			local id = tonumber(e.slotId) or ( i - 1 );
+			if ( e.itemInstanceKey and not placeOf[e.itemInstanceKey] ) then
+				placeOf[e.itemInstanceKey] = id;
+			end
+			if ( e.sourceKey and not placeOfSource[e.sourceKey] ) then
+				placeOfSource[e.sourceKey] = id;
+			end
+		end
+	end
+
 	local jew = {};
 	local list = lo.runJewelry or {};
 	for i = 1, table.getn(list) do
@@ -96,7 +126,8 @@ function G.RefreshLoadout()
 			if ( src.icon and src.icon.status == "ready" ) then
 				icon = src.icon.path;
 			end
-			table.insert(jew, { name = src.name or "?", icon = icon, category = j.category, itemId = tonumber(src.itemId) });
+			local place = ( j.itemInstanceKey and placeOf[j.itemInstanceKey] ) or placeOfSource[j.sourceKey];
+			table.insert(jew, { name = src.name or "?", icon = icon, category = j.category, itemId = tonumber(src.itemId), place = place });
 		end
 	end
 	G.jewelry = jew;
@@ -969,7 +1000,7 @@ function G.BuildSkills()
 	acc:SetWidth(ACCW);
 	acc:SetHeight(AMULET);
 	acc:SetFrameStrata("HIGH");
-	acc:SetPoint("BOTTOMLEFT", G.slots[1], "TOPLEFT", -( RACIAL + OUTER ), ACCY);
+	acc:SetPoint("BOTTOMLEFT", G.slots[1], "TOPLEFT", 0, ACCY);       -- lined up with the first skill
 	G.Movable(acc, "accessories", "Accessories", nil, nil, false);
 	G.Register(acc);
 	G.accessories = acc;
@@ -1083,20 +1114,19 @@ function G.BuildSkills()
 	BuildAuraRow(G.buffs, "BOTTOMLEFT", G.slots[4], "TOPLEFT", 6, 12);
 	BuildAuraRow(G.debuffs, "BOTTOMLEFT", G.buffs[1], "TOPLEFT", 0, 6);
 
-	-- status rows above the left three skills: summons and totems (two rows of six)
+	-- status row under the left three skills: summons and totems, one row that grows to the left. The first one is next to
+	-- the resource bar (under the orb), the others follow to the left, so a long row never reaches the orb
 	G.status = {};
 	for i = 1, STATUS do
 		local s = CreateFrame("Frame", nil, UIParent);
 		s.tipTag = "status";
 		s:SetWidth(STATUSSIZE);
 		s:SetHeight(STATUSSIZE);
-		s:SetFrameStrata("MEDIUM");
+		s:SetFrameStrata("HIGH");
 		if ( i == 1 ) then
-			s:SetPoint("BOTTOMLEFT", G.slots[1], "TOPLEFT", 0, 10);
-		elseif ( i == STATUSROW + 1 ) then
-			s:SetPoint("BOTTOMLEFT", G.status[1], "TOPLEFT", 0, 2);
+			s:SetPoint("TOPRIGHT", G.slots[3], "BOTTOMRIGHT", -STATUSX, -STATUSY);
 		else
-			s:SetPoint("LEFT", G.status[i - 1], "RIGHT", 2, 0);
+			s:SetPoint("RIGHT", G.status[i - 1], "LEFT", -2, 0);
 		end
 		local t = s:CreateTexture(nil, "BACKGROUND");
 		t:SetPoint("TOPLEFT", s, "TOPLEFT", 1, -1);
@@ -1695,39 +1725,111 @@ local function JewelWeight(category)
 	return 4;
 end
 
--- The piece's place among what the hero wears (neck 2, rings 11 and 12, trinkets 13 and 14), found by its name: the link
--- of that item has its rarity colour, and the game can show its own tooltip. With no place the piece is looked up by its
--- item id; with neither it keeps the steel border. `used`: the places already given to a piece of the same name.
+-- the item worn in a slot: its link (or nil), looked up once per pass
+local function WornLink(cache, id)
+	if ( cache[id] == nil ) then
+		cache[id] = false;
+		if ( GetInventoryItemLink ) then
+			local ok, link = pcall(GetInventoryItemLink, "player", id);
+			if ( ok and type(link) == "string" ) then
+				cache[id] = link;
+			end
+		end
+	end
+	return cache[id] or nil;
+end
+
+local function LinkName(link)
+	local _, _, name = string.find(link, "%[(.-)%]");
+	return name and string.lower(name) or nil;
+end
+
+local function WornIcon(id)
+	if ( GetInventoryItemTexture ) then
+		local ok, tex = pcall(GetInventoryItemTexture, "player", id);
+		if ( ok and type(tex) == "string" ) then
+			return string.lower(tex);
+		end
+	end
+	return nil;
+end
+
+-- Every piece gets its place among what the hero wears (neck 2, rings 11 and 12, trinkets 13 and 14), by, in this order:
+--   1. the place the loadout names for it (the item instance is the same piece, whatever its name is now)
+--   2. its name (the link of the item has it)
+--   3. its icon
+--   4. a place of its kind that no other piece has: a piece the upgrade has renamed and given another icon
+-- and shows the item's rarity colour from the link at that place. A piece without a place is looked up by its item id; with
+-- neither it keeps the steel border. `list`: the pieces in the order they are shown.
 local JEWPLACES = { { 2 }, { 11, 12 }, { 13, 14 }, { 2, 11, 12, 13, 14 } };
 
-local function JewelRarity(j, d, used)
-	local r, g, b = nil, nil, nil;
-	local slot = nil;
-	if ( GetInventoryItemLink ) then
-		local places = JEWPLACES[JewelWeight(d.category)] or JEWPLACES[4];
-		local want = string.lower(tostring(d.name));
-		for i = 1, table.getn(places) do
-			local id = places[i];
-			if ( not used[id] ) then
-				local ok, link = pcall(GetInventoryItemLink, "player", id);
-				if ( ok and type(link) == "string" ) then
-					local _, _, name = string.find(link, "%[(.-)%]");
-					if ( name and string.lower(name) == want ) then
-						slot = id;
-						used[id] = true;
-						if ( G.LinkColor ) then
-							r, g, b = G.LinkColor(link);
+local function PlaceJewelry(pieces)
+	local cache = {};
+	local used = {};
+	local done = {};
+	local n = table.getn(pieces);
+	local function take(k, id)
+		done[k] = id;
+		used[id] = true;
+	end
+	-- 1: the loadout says where
+	for k = 1, n do
+		local id = pieces[k].d.place;
+		if ( id and id >= 1 and id <= 19 and not used[id] and WornLink(cache, id) ) then
+			take(k, id);
+		end
+	end
+	-- 2: by name, 3: by icon
+	for pass = 2, 3 do
+		for k = 1, n do
+			if ( not done[k] ) then
+				local d = pieces[k].d;
+				local places = JEWPLACES[JewelWeight(d.category)] or JEWPLACES[4];
+				local want = ( pass == 2 ) and string.lower(tostring(d.name)) or ( d.icon and string.lower(tostring(d.icon)) );
+				for i = 1, table.getn(places) do
+					local id = places[i];
+					if ( want and not used[id] ) then
+						local link = WornLink(cache, id);
+						local have = nil;
+						if ( link ) then
+							have = ( pass == 2 ) and LinkName(link) or WornIcon(id);
 						end
-						break;
+						if ( have and have == want ) then
+							take(k, id);
+							break;
+						end
 					end
 				end
 			end
 		end
 	end
+	-- 4: what is left of its own kind
+	for k = 1, n do
+		local d = pieces[k].d;
+		local weight = JewelWeight(d.category);
+		if ( not done[k] and weight <= 3 ) then
+			local places = JEWPLACES[weight];
+			for i = 1, table.getn(places) do
+				local id = places[i];
+				if ( not used[id] and WornLink(cache, id) ) then
+					take(k, id);
+					break;
+				end
+			end
+		end
+	end
+	return done, cache;
+end
+
+local function JewelRarity(j, d, slot, link)
+	local r, g, b = nil, nil, nil;
+	if ( slot and link and G.LinkColor ) then
+		r, g, b = G.LinkColor(link);
+	end
 	if ( not r and d.itemId and GetItemInfo ) then
-		local ok, _, link = pcall(GetItemInfo, d.itemId);
-		if ( ok and link and G.LinkColor ) then
-			r, g, b = G.LinkColor(link);
+		local ok, _, ilink = pcall(GetItemInfo, d.itemId);
+		if ( ok and ilink and G.LinkColor ) then
+			r, g, b = G.LinkColor(ilink);
 		end
 	end
 	j.slotId = slot;
@@ -1735,9 +1837,31 @@ local function JewelRarity(j, d, used)
 	TintBevel(j.bev, r, g, b);
 end
 
+-- what the hero wears in the places of the jewelry, as one string: it changes when a piece is swapped or upgraded
+local function JewelSignature()
+	local cache = {};
+	local t = {};
+	for i = 1, table.getn(JEWPLACES[4]) do
+		t[i] = WornLink(cache, JEWPLACES[4][i]) or "-";
+	end
+	return table.concat(t, "|");
+end
+
 function G.UpdateJewelry(dt)
 	if ( not G.jewSlots ) then
 		return;
+	end
+	-- A piece that is swapped or upgraded changes the item in its place; the loadout may be a moment behind, so for the next
+	-- few seconds it is read again whatever its revision says
+	local sig = JewelSignature();
+	if ( G.jewSig and G.jewSig ~= sig ) then
+		G.jewRetry = 4;
+	end
+	G.jewSig = sig;
+	if ( G.jewRetry and G.jewRetry > 0 ) then
+		G.jewRetry = G.jewRetry - 1;
+		G.loadoutStamp = nil;
+		G.loadoutNext = nil;
 	end
 	G.RefreshLoadout();
 	local jew = G.jewelry or {};
@@ -1754,14 +1878,21 @@ function G.UpdateJewelry(dt)
 	local prev = nil;
 	local on = G.Opt("accessories");
 	local count = 0;
-	local used = {};
+	local places, links = {}, {};
+	if ( G.shown and on ) then
+		local shown = {};
+		for i = 1, 6 do
+			shown[i] = sorted[i] and { d = sorted[i].d } or nil;
+		end
+		places, links = PlaceJewelry(shown);
+	end
 	for i = 1, 6 do
 		local j = G.jewSlots[i];
 		local e = sorted[i];
 		if ( e and G.shown and on ) then
 			local d = e.d;
 			j.data = d;
-			JewelRarity(j, d, used);
+			JewelRarity(j, d, places[i], places[i] and links[places[i]]);
 			local icon = d.icon or G.QUESTION;
 			if ( j.cIcon ~= icon ) then
 				j.cIcon = icon;
@@ -1795,17 +1926,6 @@ function G.UpdateJewelry(dt)
 			j.curPrev = nil;
 			G.Vis(j, false);
 		end
-	end
-	-- the summons and totems stand above the accessories while those are in their own place; once the player has moved
-	-- the accessories away (or there are none) they drop back to just above the skills
-	local lift = 0;
-	if ( count > 0 and not G.HasPos("accessories") ) then
-		lift = AMULET + 6;
-	end
-	if ( G.status and G.status[1] and G.statusLift ~= lift ) then
-		G.statusLift = lift;
-		G.status[1]:ClearAllPoints();
-		G.status[1]:SetPoint("BOTTOMLEFT", G.slots[1], "TOPLEFT", 0, 10 + lift);
 	end
 end
 

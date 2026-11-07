@@ -1,11 +1,13 @@
-"""Writes AZSGW2UI/Sounds/party.mp3: a 24 second techno loop made from scratch (numpy + scipy, then ffmpeg for the mp3).
+"""Writes AZSGW2UI/Sounds/party_1.mp3 ... party_8.mp3: a 24 second techno loop made from scratch (numpy + scipy, then ffmpeg for the
+mp3 pieces), and cuts songs of your own into such pieces.
 
 Own music, nothing sampled: a four-on-the-floor kick, offbeat hats, claps on 2 and 4, a pumping saw bass (sidechained to the
 kick), a supersaw pad, a sixteenth arpeggio with an echo and an eight-bar lead, at 160 BPM in A minor (Am F C G, four
 times). 16 bars of 1.5 s = exactly 24 s, so the loop is a whole number of beats.
 
-usage: make_sounds.py [out.mp3]     (default: ../AZSGW2UI/Sounds/party.mp3)
-needs ffmpeg with libmp3lame in the PATH.
+usage: make_sounds.py [out folder]                        the song that comes with the addon
+       make_sounds.py split <song.mp3> <name> [out folder]  cut a song of your own into <name>_1.mp3 ... <name>_N.mp3
+needs ffmpeg and ffprobe with libmp3lame in the PATH.
 """
 import math, os, subprocess, sys, tempfile
 import numpy as np
@@ -272,21 +274,62 @@ def build():
     return mix
 
 
+CHUNK = 3.0      # seconds of song in one piece: the same numbers as CHUNK / FADE in AZSGW2UI/Rave.lua
+FADE = 0.05      # a piece starts this much early and is this much longer at the end; neighbours cross-fade over 2 * FADE
+
+
+def probe(path):
+    out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
+                                   "default=nw=1:nk=1", path])
+    return float(out.decode().strip())
+
+
+def split_song(src, outdir, name, bitrate="128k", channels=2):
+    """Cuts a song into name_1.mp3 ... name_N.mp3 (CHUNK seconds each, FADE longer at both ends; neighbours cross-fade linearly
+    over 2 * FADE so that they add up to the song again). The game cannot stop a sound that plays, so the addon starts one piece after the
+    other and stops starting them when asked to. Returns N."""
+    os.makedirs(outdir, exist_ok=True)
+    total = probe(src)
+    parts = int(math.ceil(total / CHUNK - 1e-9))
+    for k in range(1, parts + 1):
+        start = (k - 1) * CHUNK - ( FADE if k > 1 else 0.0 )
+        end = min(k * CHUNK + FADE, total)
+        dur = end - start
+        # neighbours overlap by 2 * FADE (from k * CHUNK - FADE to k * CHUNK + FADE): the one fades out and the next fades in over
+        # exactly that stretch, linearly, so together they are the song again
+        xf = 2 * FADE
+        fades = []
+        if k > 1:
+            fades.append("afade=t=in:st=0:d=%.3f:curve=tri" % xf)
+        fades.append("afade=t=out:st=%.3f:d=%.3f:curve=tri" % (max(0.0, dur - xf), min(xf, dur)))
+        out = os.path.join(outdir, "%s_%d.mp3" % (name, k))
+        subprocess.check_call(["ffmpeg", "-y", "-loglevel", "error", "-ss", "%.3f" % start, "-t", "%.3f" % dur, "-i", src,
+                               "-vn", "-map_metadata", "-1", "-af", ",".join(fades), "-ac", str(channels), "-ar", "44100",
+                               "-codec:a", "libmp3lame", "-b:a", bitrate, "-write_xing", "0", "-id3v2_version", "0", out])
+    return parts
+
+
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "AZSGW2UI", "Sounds", "party.mp3")
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    here = os.path.dirname(os.path.abspath(__file__))
+    sounds = os.path.join(here, "..", "AZSGW2UI", "Sounds")
+    # python3 make_sounds.py split <song.mp3> <name> [out folder]  : cut a song of your own into pieces
+    if len(sys.argv) >= 4 and sys.argv[1] == "split":
+        outdir = sys.argv[4] if len(sys.argv) > 4 else sounds
+        parts = split_song(sys.argv[2], outdir, sys.argv[3])
+        print("%d pieces in %s; in the game: /gw2 party song %s %d" % (parts, outdir, sys.argv[3], parts))
+        return
+    # python3 make_sounds.py [out folder]  : the song that comes with the addon, in pieces
+    outdir = sys.argv[1] if len(sys.argv) > 1 else sounds
     x = build()
     pcm = (np.clip(x, -1, 1) * 32767).astype("<i2")
-    with tempfile.NamedTemporaryFile(suffix=".raw", delete=False) as f:
-        f.write(pcm.tobytes())
-        raw = f.name
-    try:
-        subprocess.check_call(["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", str(SR), "-ac", "1", "-i", raw,
-                               "-codec:a", "libmp3lame", "-b:a", "112k", out])
-    finally:
-        os.unlink(raw)
-    print("wrote", out, os.path.getsize(out), "bytes,", len(x) / SR, "s")
+    with tempfile.TemporaryDirectory() as tmp:
+        raw = os.path.join(tmp, "song.raw")
+        wav = os.path.join(tmp, "song.wav")
+        with open(raw, "wb") as f:
+            f.write(pcm.tobytes())
+        subprocess.check_call(["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", str(SR), "-ac", "1", "-i", raw, wav])
+        parts = split_song(wav, outdir, "party", bitrate="112k", channels=1)
+    print("wrote %d pieces (%.0f s) to %s" % (parts, len(x) / SR, outdir))
 
 
 if __name__ == "__main__":

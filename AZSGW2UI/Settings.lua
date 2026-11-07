@@ -98,7 +98,9 @@ local PAGES = {
 		{ title = "Guardians", rows = {
 			Opt("Guardian list", "The list of guardians and their lairs at the side of the screen.", "guardians"),
 			Opt("Direction arrows", "An arrow beside each guardian that points the way to it.", "arrows"),
-			Opt("Health bars on the list", "The health of a guardian that fights is a bar with its percent under its name on the list, and no longer on the boss bar at the top. One or the other, never both. Needs the guardian list.", "guardianBars"),
+			Opt("Health bars on the list", "The health of a guardian that fights is a short bar with its percent under its name on the list (off by default). Switching it on takes the guardians off the boss bar, switching it off puts them back; the next switch can be set on its own. Needs the guardian list.", "guardianBars",
+				function(v) G.SetOpt("guardianBoss", not v); end),
+			Opt("Guardians on the boss bar", "A guardian that fights has its health bar on the boss bar at the top, with the bosses (on by default). Switch it off to see guardians on the list only.", "guardianBoss"),
 		} },
 	} },
 	{ name = "Utility", sections = {

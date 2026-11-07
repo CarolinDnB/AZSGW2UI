@@ -781,11 +781,11 @@ function G.UpdateBosses(dt)
 	local bossCount = table.getn(list);
 	if ( AZS_GetGuardians and not stale ) then
 		local guards = AZS_GetGuardians() or {};
-		-- with the health bars on the guardian list, a guardian that has its bar there is not in this one (never both)
-		local listed = G.ListedGuardians(guards);
+		-- "Guardians on the boss bar" off: they are not in this list (the guardian list can show their health instead)
+		local on = G.Opt("guardianBoss");
 		for i = 1, table.getn(guards) do
 			local g = guards[i];
-			if ( g.awake and not listed[G.Num(g.id)] and table.getn(list) < ROWS ) then
+			if ( on and g.awake and table.getn(list) < ROWS ) then
 				table.insert(list, { kind = "guardian", name = g.name, hp = g.hp, hpm = g.hpm, debuffs = g.debuffs });
 			end
 		end

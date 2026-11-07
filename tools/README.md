@@ -13,7 +13,7 @@ and to regenerate its art without the game.
       harness.lua         strict WoW 1.12 / Lua 5.0 mock + test scenarios (no game needed)
       run_lua.py          runs a Lua file with the system liblua (see below)
       make_textures.py    draws every texture in AZSGW2UI/Textures (pure Python + numpy + Pillow)
-      make_sounds.py      writes the one sound file in AZSGW2UI/Sounds from scratch (numpy + scipy, ffmpeg for the mp3)
+      make_sounds.py      writes the sound files in AZSGW2UI/Sounds: short pieces of 3 seconds that overlap by a tenth of a second and are played one after the other (numpy + scipy, ffmpeg for the mp3). `python3 make_sounds.py split <in.mp3> <name>` cuts any mp3 into such pieces (`<name>_1.mp3`, `<name>_2.mp3`, ...)
       render_layout.py    turns a layout dump of the harness into a PNG preview
       lint_loops.py       finds a closure that uses a numeric for loop variable (Lua 5.0 shares it between the closures of the loop)
     .github/workflows/release.yml   the Release workflow (Actions tab > Release > Run workflow)

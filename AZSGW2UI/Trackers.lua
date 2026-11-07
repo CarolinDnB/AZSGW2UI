@@ -10,10 +10,11 @@ local ROWH = 18;            -- one guardian: the line with the skull, the name a
 local BARROW = 14;          -- extra room under a guardian that is fighting: its health bar (12) and a gap (2)
 local BARH = 12;
 local BARX = 24;            -- the bar starts under the name
+local BARW = 150;           -- and is short: it stays well inside the list (250 wide), and far from the edge of the screen
 
--- Where the health of the guardians is drawn: on the boss bar at the top (default), or as a bar with the percent under each
--- guardian on this list. Never both. The list is only used while it is shown: with the list switched off the boss bar
--- keeps the guardians, so their health is always somewhere.
+-- The health of a guardian that fights can be drawn on the boss bar at the top (the default, "Guardians on the boss bar") and,
+-- when "Health bars on the list" is on, as a short bar with the percent under that guardian on this list. The two switches are
+-- separate; switching the list bars on in the settings switches the boss bar one off (and back on with them).
 function G.GuardianBarsOnList()
 	return G.Opt("guardianBars") and G.Opt("guardians") and true or false;
 end
@@ -44,12 +45,6 @@ function G.GuardianBars(guards)
 		end
 	end
 	return rows, ids;
-end
-
--- the boss bar asks only for the ids
-function G.ListedGuardians(guards)
-	local _, ids = G.GuardianBars(guards);
-	return ids;
 end
 
 function G.BuildGuardians()
@@ -125,7 +120,7 @@ function G.BuildGuardians()
 		r.info = G.TextS(r, 12, "RIGHT");
 		r.info:SetPoint("RIGHT", r, "RIGHT", -22, 0);
 		-- the health bar of a fighting guardian, under its line (only with the bars on the list)
-		r.bar = G.NewFlatBar(r, 250 - BARX - 4, BARH);
+		r.bar = G.NewFlatBar(r, BARW, BARH);
 		r.bar:SetPoint("TOPLEFT", r, "BOTTOMLEFT", BARX, -1);
 		r.bar.pct = G.TextS(r.bar, 10, "CENTER");
 		r.bar.pct:SetPoint("CENTER", r.bar, "CENTER", 0, 0);

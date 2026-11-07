@@ -603,7 +603,8 @@ end
 function PlaySound(n) table.insert(playedSounds, n) end
 playedFiles = {}
 local soundHandles = 0
-function PlaySoundFile(path) table.insert(playedFiles, path); soundHandles = soundHandles + 1; return true, (RETURN_HANDLES and soundHandles or nil) end
+playedTimes = {}
+function PlaySoundFile(path) table.insert(playedFiles, path); table.insert(playedTimes, GetTime()); soundHandles = soundHandles + 1; return true, (RETURN_HANDLES and soundHandles or nil) end
 function GetAddOnMetadata(addon, field) if addon == "AZSGW2UI" and field == "Version" then return "9.9.9-test" end end
 function GetPlayerBuff(i, filter)
 	local n = (filter == "HELPFUL") and 4 or 2
@@ -1529,10 +1530,10 @@ scenario("settings window + unlock layout", function()
 		for i, t in ipairs(f.tabs) do names[i] = t.text.text end
 		assert(names[1] == "Interface" and names[2] == "Nameplates" and names[3] == "Damage" and names[4] == "Map & Guardians" and names[5] == "Utility", "page names: " .. table.concat(names, ","))
 		for i = 1, #f.pages do assert((perPage[i] or 0) >= 1 or i == 1, "page " .. i .. " has no switch") end
-		-- the 23 switches of 1.9.2 are all still there, and the new ones for the guardian bars and the accessories
+		-- the 23 switches of 1.9.2 are all still there, and the new ones for the guardian bars (and the boss bar of the guardians) and the accessories
 		local n = 0
 		for _ in pairs(seen) do n = n + 1 end
-		assert(n == 25, "number of switches: " .. n)
+		assert(n == 26, "number of switches: " .. n)
 		assert(seen["Accessories"], "a switch for the accessories")
 		-- every switch of a page is inside its panel and every panel inside the page (nothing hangs out of the window)
 		for _, c in ipairs(f.checks) do
@@ -1611,6 +1612,16 @@ scenario("per-frame size in unlock mode", function()
 	-- what hangs off which movable frame
 	assert(G.groupOf[G.slots[1]] == "orb" and G.groupOf[G.slots[6]] == "orb" and G.groupOf[G.racial] == "orb", "slots not in the skill bar group")
 	assert(G.groupOf[G.resource] == "orb" and G.groupOf[G.status[1]] == "orb", "resource / status not in the skill bar group")
+	-- summons and totems: one row under the left three skills, growing to the left, clear of the resource bar under the orb
+	do
+		local p1, p2 = lastPoint(G.status[1]), lastPoint(G.status[2])
+		assert(p1[1] == "TOPRIGHT" and p1[2] == G.slots[3] and p1[3] == "BOTTOMRIGHT" and p1[5] < 0, "status row starts under the third skill")
+		assert(p2[1] == "RIGHT" and p2[2] == G.status[1] and p2[3] == "LEFT", "the next one is to the left")
+		assert(G.status[12].pts[1][2] == G.status[11], "one row of twelve")
+		local clear = G.orb:GetWidth() / 2 + 6 + ( -p1[4] ) - G.resource:GetWidth() / 2
+		assert(clear >= 4, "the status row ends left of the resource bar: " .. clear)
+		assert(G.status[1].strata == "HIGH", "above the game's HUD frames: the mouse reaches the summons")
+	end
 	assert(G.groupOf[G.mapButton] == "mapButton" and G.groupOf[G.target] == "target")
 	assert(G.groupOf[G.meter] == "meter")
 	-- the wheel over the skill bar's box: the whole bar grows, nothing else does
@@ -2933,18 +2944,20 @@ scenario("jewelry row", function()
 		local acc = G.accessories
 		local ap = acc.pts[1]
 		assert(ap[1] == "BOTTOMLEFT" and ap[2] == G.slots[1] and ap[3] == "TOPLEFT" and ap[5] > 0, "above the first skill")
-		assert(ap[4] < 0 and ap[4] >= -60, "starts at the racial's edge: " .. tostring(ap[4]))
+		assert(ap[4] == 0, "lined up with the first skill: " .. tostring(ap[4]))
 		local m = G.MovableByKey("accessories")
 		assert(m and m.label == "Accessories" and m.frame == acc, "movable, called Accessories")
 		assert(G.groupOf[G.jewSlots[1]] == "accessories" and G.groupOf[G.jewSlots[6]] == "accessories", "the pieces scale with their box")
-		assert(acc:GetWidth() >= 38 + 7 + 5 * 31 + 4 * 3 - 1, "the box holds all six pieces")
-		-- the whole row stays clear of the orb: its right end is left of the orb's left rim
-		-- (6 pieces: the amulet and five more)
-		assert(acc:GetWidth() <= 3 * 52 + 2 * 3 + 40 + 8 + 4, "not wider than racial + left three: " .. acc:GetWidth())
+		-- the five pieces a hero can wear (amulet, two rings, two trinkets) are exactly as wide as the left three skills
+		local five = G.jewSlots[1]:GetWidth() + 6 + 4 * G.jewSlots[2]:GetWidth() + 3 * 3
+		assert(acc:GetWidth() == 3 * 52 + 2 * 3 and five == acc:GetWidth(), "five pieces as wide as skills 1 - 3: " .. five .. " vs " .. acc:GetWidth())
 	end
-	-- the summons and totems stand above the row while it is in its place
-	local stp = lastPoint(G.status[1])
-	assert(stp[2] == G.slots[1] and stp[5] >= 10 + 38, "status rows above the accessories: " .. tostring(stp[5]))
+	-- the right end of the row reaches no further than the right edge of the third skill
+	do
+		local last = G.jewSlots[5]
+		local right = last.pts[1]
+		assert(last:GetWidth() > 0 and right[2] == G.jewSlots[4], "pieces hang off each other")
+	end
 	assert(p2[2] == a and p5[2] == G.jewSlots[4] and p2[1] == "BOTTOMLEFT" and p2[3] == "BOTTOMRIGHT", "bottoms line up, each next to the one before")
 	assert(p2[4] > p5[4], "a little more room after the amulet than between the others")
 	for i = 1, 5 do assert(G.jewSlots[i].shown, "slot " .. i .. " shown") ; assert(G.jewSlots[i].icon.tex, "icon " .. i) end
@@ -2955,6 +2968,11 @@ scenario("jewelry row", function()
 	assert(tipLines[1] == "Ring One" and tipLines[2] == "Ring", "tooltip: name and kind: " .. table.concat(tipLines, " | "))
 	G.jewSlots[2].scripts.OnLeave()
 	assert(G.jewSlots[2].bev.tint == "steel" and G.jewSlots[2].slotId == nil, "pieces that are not worn keep the steel border")
+	local gear13 = worn[13]
+	worn[13] = nil                                          -- (the default mock wears some Gear in the first trinket place)
+	runTicks(3, 1.1)
+	assert(G.jewSlots[4].slotId == nil and G.jewSlots[4].bev.tint == "steel", "an empty place gives no tooltip and no colour")
+	worn[13] = gear13
 	-- worn: the border has the colour of the rarity and the tooltip is the game's own tooltip of the item
 	do
 		local saved = { worn[2], worn[11], worn[12], worn[13], worn[14] }
@@ -2999,6 +3017,87 @@ scenario("jewelry row", function()
 		G.jewSlots[3].data.name = "Ring One"
 		runTicks(3, 1.1)
 		assert(G.jewSlots[2].slotId == 11 and G.jewSlots[3].slotId == 12, "same name, two places: " .. tostring(G.jewSlots[2].slotId) .. "," .. tostring(G.jewSlots[3].slotId))
+		G.jewSlots[3].data.name = "Ring Two"                    -- (the test before changed it)
+		-- an UPGRADE: the item in the place is another one (a better rarity, and for the ring also another name and icon), and the
+		-- loadout still has the old data and the old revision
+		worn[2] = { "Interface\\Icons\\INV_Jewelry_Necklace_01", "|cffa335ee|Hitem:21:0:0:0|h[Amulet of Doom]|h|r" }
+		worn[11] = { "Interface\\Icons\\INV_Jewelry_Ring_01", "|cffffffff|Hitem:22:0:0:0|h[Ring One]|h|r" }
+		worn[12] = { "Interface\\Icons\\INV_Jewelry_Ring_02", "|cff1eff00|Hitem:23:0:0:0|h[Ring Two]|h|r" }
+		worn[13] = { "Interface\\Icons\\INV_Misc_Gear_01", "|cffff8000|Hitem:24:0:0:0|h[Trinket One]|h|r" }
+		worn[14] = { "Interface\\Icons\\INV_Misc_Gear_02", "|cffffffff|Hitem:25:0:0:0|h[Trinket Two]|h|r" }
+		runTicks(3, 1.1)
+		assert(G.jewSlots[2].slotId == 11 and near(left(2), 0.74, 0.74, 0.78), "before the upgrade: a white ring")
+		-- same name, better rarity
+		worn[11] = { "Interface\\Icons\\INV_Jewelry_Ring_01", "|cff1eff00|Hitem:32:0:0:0|h[Ring One]|h|r" }
+		runTicks(3, 1.1)
+		assert(near(left(2), 0x1e / 255, 1, 0) and G.jewSlots[2].slotId == 11, "upgraded to green: the border follows")
+		-- another name and another icon too: nothing in the loadout says so, the place is still the ring's
+		worn[11] = { "Interface\\Icons\\INV_Jewelry_Ring_09", "|cff0070dd|Hitem:33:0:0:0|h[Fine Ring of Doom]|h|r" }
+		runTicks(3, 1.1)
+		assert(G.jewSlots[2].slotId == 11 and near(left(2), 0, 0x70 / 255, 0xdd / 255), "renamed by the upgrade: still its place, blue border: " .. tostring(G.jewSlots[2].slotId))
+		assert(G.jewSlots[3].slotId == 12, "the other ring keeps its place")
+		INV_TIP = true; lastInvTip = nil; tipLines = {}
+		G.jewSlots[2].scripts.OnEnter()
+		assert(lastInvTip == 11, "and the tooltip is the game's tooltip of the upgraded ring: " .. tostring(lastInvTip))
+		G.jewSlots[2].scripts.OnLeave()
+		INV_TIP = nil
+		-- the loadout names the places itself (item instances), so even two renamed rings are told apart: Ring One now sits in 12
+		do
+			local prev = AZS_GetMeterLoadout
+			AZS_GetMeterLoadout = function(q)
+				local lo = prev(q)
+				for _, e in ipairs(lo.runJewelry) do e.itemInstanceKey = "inst:" .. e.sourceKey end
+				lo.equipment = {}
+				for i = 1, 20 do lo.equipment[i] = { slotId = i - 1, supported = true, occupied = false } end
+				lo.equipment[13] = { slotId = 12, supported = true, occupied = true, itemInstanceKey = "inst:item:r1", sourceKey = "item:r1" }
+				lo.equipment[12] = { slotId = 11, supported = true, occupied = true, itemInstanceKey = "inst:item:r2", sourceKey = "item:r2" }
+				return lo
+			end
+			worn[11] = { "Interface\\Icons\\INV_Jewelry_Ring_11", "|cff1eff00|Hitem:34:0:0:0|h[Sparkling Band]|h|r" }
+			worn[12] = { "Interface\\Icons\\INV_Jewelry_Ring_12", "|cffa335ee|Hitem:35:0:0:0|h[Shimmering Loop]|h|r" }
+			metaRev = metaRev .. "e"
+			runTicks(3, 1.1)
+			assert(G.jewSlots[2].data.name == "Ring One" and G.jewSlots[2].slotId == 12 and near(left(2), 0xa3 / 255, 0x35 / 255, 0xee / 255),
+				"Ring One is the item in place 12: " .. tostring(G.jewSlots[2].slotId))
+			assert(G.jewSlots[3].data.name == "Ring Two" and G.jewSlots[3].slotId == 11 and near(left(3), 0x1e / 255, 1, 0), "Ring Two is the item in place 11")
+			AZS_GetMeterLoadout = prev
+			metaRev = metaRev .. "f"
+			runTicks(3, 1.1)
+		end
+		-- a loadout that is a moment behind (same revision, the old piece in it) is read again after the worn pieces change
+		do
+			local reads = 0
+			local prev = AZS_GetMeterLoadout
+			local upgraded = false
+			AZS_GetMeterLoadout = function(q)
+				reads = reads + 1
+				local lo = prev(q)
+				if upgraded then
+					lo.sources["item:t1"] = nil
+					lo.sources["item:t1b"] = { name = "Trinket One+", icon = { status = "ready", path = "Interface\\Icons\\INV_Misc_Gear_05" } }
+					for _, e in ipairs(lo.runJewelry) do if e.sourceKey == "item:t1" then e.sourceKey = "item:t1b" end end
+				end
+				return lo
+			end
+			runTicks(8, 1.1)
+			local r0 = reads
+			runTicks(8, 1.1)
+			assert(reads == r0, "nothing changed: the loadout is not read again (" .. (reads - r0) .. ")")
+			upgraded = true
+			worn[13] = { "Interface\\Icons\\INV_Misc_Gear_05", "|cff0070dd|Hitem:36:0:0:0|h[Trinket One+]|h|r" }
+			runTicks(2, 1.1)
+			assert(reads > r0, "the worn piece changed: the loadout is read again")
+			local t
+			for i = 1, 6 do if G.jewSlots[i].data and G.jewSlots[i].data.name == "Trinket One+" then t = G.jewSlots[i] end end
+			assert(t and t.slotId == 13 and near(t.bev.edges.left.vc, 0, 0x70 / 255, 0xdd / 255), "the upgraded trinket shows its new name, place and colour")
+			runTicks(12, 1.1)
+			local r1 = reads
+			runTicks(8, 1.1)
+			assert(reads == r1 and r1 - r0 <= 6, "the extra reads stop after a few seconds: " .. (r1 - r0))
+			AZS_GetMeterLoadout = prev
+			metaRev = metaRev .. "g"
+			runTicks(3, 1.1)
+		end
 		worn[2], worn[11], worn[12], worn[13], worn[14] = saved[1], saved[2], saved[3], saved[4], saved[5]
 		runTicks(3, 1.1)
 		assert(G.jewSlots[2].bev.tint == "steel", "no longer worn: steel again")
@@ -3042,18 +3141,9 @@ scenario("jewelry row", function()
 		metaRev = metaRev .. "z"
 		runTicks(3, 1.1)
 	end
-	-- moved away by the player: the summons drop back to just above the skills
-	AZSGW2DB.pos = AZSGW2DB.pos or {}
-	AZSGW2DB.pos.accessories = { "CENTER", "CENTER", 300, 200 }
-	runTicks(4, 1.1)
-	assert(lastPoint(G.status[1])[5] == 10, "summons back above the skills once the accessories were moved: " .. tostring(lastPoint(G.status[1])[5]))
-	AZSGW2DB.pos.accessories = nil
-	runTicks(4, 1.1)
-	assert(lastPoint(G.status[1])[5] >= 10 + 38, "summons above the accessories again")
 	-- the switch
 	G.SetOpt("accessories", false); runTicks(4, 1.1)
 	for i = 1, 6 do assert(not G.jewSlots[i].shown, "accessories off: slot " .. i) end
-	assert(lastPoint(G.status[1])[5] == 10, "accessories off: summons just above the skills")
 	G.SetOpt("accessories", true); runTicks(4, 1.1)
 	assert(G.jewSlots[1].shown, "accessories back on")
 	AZS_GetMeterLoadout = old
@@ -3100,8 +3190,16 @@ scenario("secret party mode", function()
 	end
 	assert(#allWidgets == widgets1, "nothing new is created while it runs")
 	for i = chat0 + 1, #chatLines do assert(not chatLines[i]:find("error"), "an error while it runs: " .. chatLines[i]) end
-	-- the song starts once and plays on
-	assert(#playedFiles - files0 == 1 and playedFiles[#playedFiles] == "Interface\\AddOns\\AZSGW2UI\\Sounds\\party.mp3", "one song: " .. tostring(playedFiles[#playedFiles]))
+	-- the song is played in pieces of 3 seconds, one after the other, each started a moment before its time (so that it fades into
+	-- the one before): the first at once, the second 2.925 s later, the third 3 s after that
+	assert(#playedFiles - files0 == 3, "three pieces in eight seconds: " .. (#playedFiles - files0))
+	for k = 1, 3 do
+		assert(playedFiles[files0 + k] == "Interface\\AddOns\\AZSGW2UI\\Sounds\\party_" .. k .. ".mp3", "piece " .. k .. ": " .. tostring(playedFiles[files0 + k]))
+	end
+	do
+		local t1, t2, t3 = playedTimes[files0 + 1], playedTimes[files0 + 2], playedTimes[files0 + 3]
+		assert(math.abs(t2 - t1 - 2.925) < 0.05 and math.abs(t3 - t2 - 3.0) < 0.05, string.format("piece times %.3f %.3f", t2 - t1, t3 - t2))
+	end
 	-- the interface bounces, a few percent
 	assert(maxScale > 1.02 and maxScale < 1.06, "the interface bounces a little: " .. maxScale)
 	-- nothing flashes: the wash stays faint, never goes dark and bright, and its brightness turns round no more than the beat does
@@ -3119,21 +3217,22 @@ scenario("secret party mode", function()
 	print(string.format("party wash alpha %.3f .. %.3f, %d turns in 8 s", lo, hi, turns))
 	assert(hi <= 0.11 and lo >= 0.04 and hi - lo <= 0.06, "the wash is faint and gentle")
 	assert(turns <= 8 * 2.7 * 2 + 4, "no faster than the beat (under three a second): " .. turns)
-	-- the song comes round again after its length
+	-- the song comes round again after its length: 8 pieces, then the first again
 	runTicks(800, 1 / 30)
-	assert(#playedFiles - files0 == 2, "the loop plays again: " .. (#playedFiles - files0))
+	assert(#playedFiles - files0 == 12, "twelve pieces in 35 seconds: " .. (#playedFiles - files0))
+	assert(playedFiles[files0 + 8]:find("party_8.mp3", 1, true) and playedFiles[files0 + 9]:find("party_1.mp3", 1, true), "the loop starts over")
 	-- off: the interface is back at its own size, the overlay is gone, the updater idles
 	SlashCmdList["AZSGW2"]("party")
 	assert(not G.rave.on and not f.shown, "party mode off")
 	for _, fr in ipairs(G.all) do assert(fr.scale == G.ScaleFor(fr), "size back to normal") end
 	assert(G.raveUpdater.interval >= 0.5, "idle again")
 	local count = #playedFiles
-	runTicks(30, 1 / 30)
-	assert(#playedFiles == count, "no more songs started while it is off")
-	-- switched on again while the song still plays: it waits for the end instead of starting a second one on top
+	runTicks(300, 1 / 30)
+	assert(#playedFiles == count, "no more pieces started while it is off: the song ends with the piece that plays")
+	-- switched on again: the song starts from its first piece
 	SlashCmdList["AZSGW2"]("party on")
 	runTicks(30, 1 / 30)
-	assert(G.rave.on and #playedFiles == count, "the old song is not covered by a new one")
+	assert(G.rave.on and #playedFiles == count + 1 and playedFiles[#playedFiles]:find("party_1.mp3", 1, true), "starts from the first piece")
 	SlashCmdList["AZSGW2"]("party off")
 	-- /gw2 off ends it too
 	SlashCmdList["AZSGW2"]("party")
@@ -3143,21 +3242,24 @@ scenario("secret party mode", function()
 	SlashCmdList["AZSGW2"]("on")
 	-- a song of the player's own
 	now = now + 100
-	SlashCmdList["AZSGW2"]("party song mysong 100")
-	assert(AZSGW2DB.partySong and AZSGW2DB.partySong.file == "mysong" and AZSGW2DB.partySong.len == 100)
+	SlashCmdList["AZSGW2"]("party song mysong 12")
+	assert(AZSGW2DB.partySong and AZSGW2DB.partySong.file == "mysong" and AZSGW2DB.partySong.parts == 12)
 	SlashCmdList["AZSGW2"]("party song ../evil 10"); assert(AZSGW2DB.partySong.file == "mysong", "a path is not a file name")
-	SlashCmdList["AZSGW2"]("party song x 99999"); assert(AZSGW2DB.partySong.file == "mysong", "a silly length is refused")
+	SlashCmdList["AZSGW2"]("party song x 99999"); assert(AZSGW2DB.partySong.file == "mysong", "a silly number of pieces is refused")
+	SlashCmdList["AZSGW2"]("party song x 0"); assert(AZSGW2DB.partySong.file == "mysong", "no pieces is refused")
+	SlashCmdList["AZSGW2"]("party song x"); assert(AZSGW2DB.partySong.file == "mysong", "the number of pieces is needed")
 	local c1 = #playedFiles
 	SlashCmdList["AZSGW2"]("party on"); runTicks(10, 1 / 30)
-	assert(#playedFiles == c1 + 1 and playedFiles[#playedFiles]:find("mysong.mp3", 1, true), "the player's song plays")
+	assert(#playedFiles == c1 + 1 and playedFiles[#playedFiles]:find("mysong_1.mp3", 1, true), "the player's song plays")
 	SlashCmdList["AZSGW2"]("party off")
 	-- damaged saved variables fall back to the built-in song
 	now = now + 200
-	for _, bad in ipairs({ { file = "a\\b", len = 10 }, { file = string.rep("a", 100), len = 10 }, { file = "ok", len = 1 }, { file = "ok", len = -5 }, { file = "ok", len = 0 / 0 }, { file = 5, len = 10 }, "x" }) do
+	for _, bad in ipairs({ { file = "a\\b", parts = 10 }, { file = string.rep("a", 100), parts = 10 }, { file = "ok", parts = 0 }, { file = "ok", parts = -5 },
+		{ file = "ok", parts = 401 }, { file = "ok", parts = 2.5 }, { file = "ok", parts = 0 / 0 }, { file = 5, parts = 10 }, { file = "ok", len = 10 }, "x" }) do
 		AZSGW2DB.partySong = bad
 		local c2 = #playedFiles
 		SlashCmdList["AZSGW2"]("party on"); runTicks(5, 1 / 30)
-		assert(#playedFiles == c2 + 1 and playedFiles[#playedFiles]:find("party.mp3", 1, true), "built-in song for a damaged setting")
+		assert(#playedFiles == c2 + 1 and playedFiles[#playedFiles]:find("party_1.mp3", 1, true), "built-in song for a damaged setting")
 		SlashCmdList["AZSGW2"]("party off")
 		now = now + 100
 	end
@@ -3165,48 +3267,51 @@ scenario("secret party mode", function()
 	SlashCmdList["AZSGW2"]("party song")
 	now = now + 100
 	runTicks(2, 0.1)
-	-- stopping the song: the sound effects are switched off for a moment (a playing sound is dropped) and put back
+	-- stopping the song: no new piece starts, and the game's sound is switched off for a moment (a playing sound is dropped) and put back
 	do
-		cvars["Sound_EnableSFX"] = "1"
+		cvars["EnableSound"] = "1"
 		now = now + 300
 		local c0 = #playedFiles
 		SlashCmdList["AZSGW2"]("party on"); runTicks(10, 1 / 30)
 		assert(#playedFiles == c0 + 1, "a song is playing")
 		n0 = #chatLines
 		SlashCmdList["AZSGW2"]("party off")
-		assert(cvars["Sound_EnableSFX"] == "0", "the sound effects are off the moment the party ends")
-		assert(AZSGW2DB.sfxMuted == "Sound_EnableSFX", "remembered in case the game ends now")
+		assert(cvars["EnableSound"] == "0", "the sound effects are off the moment the party ends")
+		assert(AZSGW2DB.sfxMuted == "EnableSound", "remembered in case the game ends now")
 		local said = table.concat(chatLines, "\n", n0 + 1)
 		assert(said:find("party's over") and not said:find("ends by itself"), "it does not say the song has to play out: " .. said)
 		runTicks(2, 0.1)
-		assert(cvars["Sound_EnableSFX"] == "0", "still off after a fifth of a second")
+		assert(cvars["EnableSound"] == "0", "still off after a fifth of a second")
 		runTicks(12, 0.1)
-		assert(cvars["Sound_EnableSFX"] == "1" and AZSGW2DB.sfxMuted == nil, "back on after half a second")
+		assert(cvars["EnableSound"] == "1" and AZSGW2DB.sfxMuted == nil, "back on after half a second")
 		assert(G.raveUpdater.interval >= 0.5, "idle again")
+		local cnt = #playedFiles
+		runTicks(150, 1 / 30)
+		assert(#playedFiles == cnt, "no piece starts after the party is over")
 		-- on again within the half second: the effects are back first and the new song is heard
 		SlashCmdList["AZSGW2"]("party on"); runTicks(5, 1 / 30)
 		SlashCmdList["AZSGW2"]("party off")
-		assert(cvars["Sound_EnableSFX"] == "0")
+		assert(cvars["EnableSound"] == "0")
 		local c1 = #playedFiles
 		SlashCmdList["AZSGW2"]("party on")
-		assert(cvars["Sound_EnableSFX"] == "1", "a quick restart puts the effects back at once")
+		assert(cvars["EnableSound"] == "1", "a quick restart puts the effects back at once")
 		runTicks(5, 1 / 30)
 		assert(#playedFiles == c1 + 1, "and the new song starts: " .. (#playedFiles - c1))
 		SlashCmdList["AZSGW2"]("party off"); runTicks(15, 0.1)
-		assert(cvars["Sound_EnableSFX"] == "1")
+		assert(cvars["EnableSound"] == "1")
 		-- the game ended in the middle of the switch: the next start of the addon puts it back
-		cvars["Sound_EnableSFX"] = "0"; AZSGW2DB.sfxMuted = "Sound_EnableSFX"; G.rave.checked = false; G.rave.sfx = nil
+		cvars["EnableSound"] = "0"; AZSGW2DB.sfxMuted = "EnableSound"; G.rave.checked = false; G.rave.sfx = nil
 		runTicks(2, 0.5)
-		assert(cvars["Sound_EnableSFX"] == "1" and AZSGW2DB.sfxMuted == nil, "put back after a crash")
+		assert(cvars["EnableSound"] == "1" and AZSGW2DB.sfxMuted == nil, "put back after a crash")
 		-- a silly remembered value is never written to the game
 		AZSGW2DB.sfxMuted = "Sound_Volume"; G.rave.checked = false; cvars["Sound_Volume"] = "0.5"
 		runTicks(2, 0.5)
 		assert(cvars["Sound_Volume"] == "0.5" and AZSGW2DB.sfxMuted == nil, "an unknown name is dropped, not set")
 		-- sound effects the player had switched off are left alone
-		cvars["Sound_EnableSFX"] = "0"
+		cvars["EnableSound"] = "0"
 		SlashCmdList["AZSGW2"]("party on"); runTicks(5, 1 / 30); SlashCmdList["AZSGW2"]("party off"); runTicks(15, 0.1)
-		assert(cvars["Sound_EnableSFX"] == "0" and AZSGW2DB.sfxMuted == nil, "effects the player switched off stay off")
-		cvars["Sound_EnableSFX"] = nil
+		assert(cvars["EnableSound"] == "0" and AZSGW2DB.sfxMuted == nil, "effects the player switched off stay off")
+		cvars["EnableSound"] = nil
 		-- the other name of the same switch
 		cvars["MasterSoundEffects"] = "1"
 		SlashCmdList["AZSGW2"]("party on"); runTicks(5, 1 / 30); SlashCmdList["AZSGW2"]("party off")
@@ -3219,16 +3324,24 @@ scenario("secret party mode", function()
 		SlashCmdList["AZSGW2"]("party on"); runTicks(5, 1 / 30); SlashCmdList["AZSGW2"]("party off")
 		assert(#stopped == 1 and stopped[1] == soundHandles, "StopSound got the handle of the song")
 		StopSound, RETURN_HANDLES = nil, nil
-		-- a song of the player's own, with no length: played once, never repeated
-		SlashCmdList["AZSGW2"]("party song caramell")
-		assert(AZSGW2DB.partySong.file == "caramell" and AZSGW2DB.partySong.len == 0, "no length: played once")
+		-- only the first switch that exists is touched
+		cvars["EnableSound"] = "1"; cvars["Sound_EnableSFX"] = "1"
+		SlashCmdList["AZSGW2"]("party on"); runTicks(5, 1 / 30); SlashCmdList["AZSGW2"]("party off")
+		assert(cvars["EnableSound"] == "0" and cvars["Sound_EnableSFX"] == "1", "one switch at a time")
+		runTicks(15, 0.1)
+		assert(cvars["EnableSound"] == "1" and cvars["Sound_EnableSFX"] == "1")
+		cvars["Sound_EnableSFX"] = nil
+		-- a song of the player's own, in pieces: the file name and the number of pieces
+		SlashCmdList["AZSGW2"]("party song caramell 59")
+		assert(AZSGW2DB.partySong.file == "caramell" and AZSGW2DB.partySong.parts == 59, "name and number of pieces")
 		now = now + 400
 		local c2 = #playedFiles
-		SlashCmdList["AZSGW2"]("party on"); runTicks(2400, 1 / 30)
-		assert(#playedFiles == c2 + 1 and playedFiles[#playedFiles]:find("caramell.mp3", 1, true), "played once, 80 seconds, no repeat: " .. (#playedFiles - c2))
+		SlashCmdList["AZSGW2"]("party on"); runTicks(60 * 30, 1 / 30)
+		assert(#playedFiles - c2 == 20 or #playedFiles - c2 == 21, "a piece every three seconds for a minute: " .. (#playedFiles - c2))
+		assert(playedFiles[c2 + 1]:find("caramell_1.mp3", 1, true) and playedFiles[c2 + 2]:find("caramell_2.mp3", 1, true), "in order")
 		SlashCmdList["AZSGW2"]("party off")
-		SlashCmdList["AZSGW2"]("party song caramell 214"); assert(AZSGW2DB.partySong.len == 214)
 		SlashCmdList["AZSGW2"]("party song default")
+		assert(AZSGW2DB.partySong == nil, "back to the built-in song")
 		now = now + 400
 	end
 	-- the old diagnostic lives on under its new name
@@ -3237,32 +3350,38 @@ scenario("secret party mode", function()
 	assert(#chatLines > n0, "/gw2 partyinfo still prints")
 end)
 
-scenario("guardian health: boss bar or guardian list, never both", function()
+scenario("guardian health: boss bar and guardian list, two separate switches", function()
 	local f, c = G.guardians, G.bossFrame
 	local function top()
 		local names = {}
 		for _, r in ipairs(c.rows) do if r.shown and r.entry then names[r.entry.name] = (r.entry.kind or "?") end end
 		return names
 	end
+	local function click(label)
+		for _, ch in ipairs(G.settings.checks) do if ch.row.label == label then ch.scripts.OnClick(); return end end
+		error("no switch " .. label)
+	end
 	runTicks(8, 0.3)
-	-- default: the boss bar at the top has the fighting guardian; the list has no bars
-	assert(G.Opt("guardianBars") == false and not G.GuardianBarsOnList(), "default is the boss bar")
+	-- default: guardians on the boss bar, no bars on the list
+	assert(G.Opt("guardianBars") == false and G.Opt("guardianBoss") == true and not G.GuardianBarsOnList(), "default is the boss bar")
 	assert(top()["Necrofiend"] == "guardian" and top()["Boss C"], "guardian on the boss bar by default")
 	for i = 1, 8 do assert(not f.rows[i].bar.shown, "no bar in the list by default, row " .. i) end
 	assert(lastPoint(f.rows[2])[5] == -42 and lastPoint(f.rows[3])[5] == -60, "plain rows are 18 px apart")
-	-- bars on the list: the awake guardian (id 5) gets its bar under its row, 11% of 900 / 100
-	G.SetOpt("guardianBars", true)
+	-- the switch "Health bars on the list" takes the guardians off the boss bar with it
+	click("Health bars on the list")
 	runTicks(8, 0.3)
+	assert(G.Opt("guardianBars") == true and G.Opt("guardianBoss") == false, "list bars on, boss bar off")
 	assert(G.GuardianBarsOnList(), "option and list on")
 	assert(f.rows[2].bar.shown and f.rows[2].bar.pct.text == "11%", "bar with percent under the fighting guardian: " .. tostring(f.rows[2].bar.pct.text))
 	assert(not f.rows[1].bar.shown and not f.rows[3].bar.shown, "no bar for an empty lair or a sleeping guardian")
 	local bp = lastPoint(f.rows[2].bar)
 	assert(bp[1] == "TOPLEFT" and bp[2] == f.rows[2] and bp[3] == "BOTTOMLEFT", "bar hangs under its own row")
-	assert(f.rows[2].bar:GetWidth() > 100 and f.rows[2].bar.fill.shown, "bar has a width and a fill")
+	-- short: it stays well inside the list (and so far from the screen's edge)
+	assert(f.rows[2].bar:GetWidth() >= 100 and f.rows[2].bar:GetWidth() <= 160 and f.rows[2].bar.fill.shown, "a short bar with a fill")
+	assert(bp[4] + f.rows[2].bar:GetWidth() <= f:GetWidth() - 40, "the bar ends well before the right edge of the list")
 	assert(lastPoint(f.rows[2])[5] == -42 and lastPoint(f.rows[3])[5] == -74, "the row after a bar is lower by the bar: " .. tostring(lastPoint(f.rows[3])[5]))
 	assert(f:GetHeight() == 24 + 3 * 18 + 14 + 4, "list height with one bar: " .. tostring(f:GetHeight()))
-	-- the boss bar has the boss but no guardian now (never both)
-	assert(top()["Boss C"] and not top()["Necrofiend"], "the top bar leaves the listed guardian out")
+	assert(top()["Boss C"] and not top()["Necrofiend"], "the top bar leaves the guardian out")
 	dumpLayout(OUTDIR .. "/layout_guardlist.txt")
 	-- health follows
 	local sg = AZS_GetGuardians
@@ -3276,30 +3395,45 @@ scenario("guardian health: boss bar or guardian list, never both", function()
 	runTicks(4, 0.3)
 	assert(f.rows[3].bar.shown and f.rows[3].bar.pct.text == "100%" and f:GetHeight() == 24 + 3 * 18 + 28 + 4, "two bars")
 	assert(not top()["Necrofiend"] and not top()["Spectral Tutor"] and top()["Boss C"], "none of the two on the top bar")
-	-- a guardian whose lair is not among the rows (id unknown to the list) is not lost: the boss bar keeps it
+	-- the switches are separate: with the boss bar one on again, the guardians are on both
+	click("Guardians on the boss bar")
+	runTicks(4, 0.3)
+	assert(G.Opt("guardianBoss") == true and G.Opt("guardianBars") == true, "both on")
+	assert(top()["Necrofiend"] and top()["Spectral Tutor"] and f.rows[2].bar.shown and f.rows[3].bar.shown, "on the boss bar and on the list")
+	-- a guardian whose lair is not among the rows (id unknown to the list) has no bar there and stays on the boss bar
 	AZS_GetGuardians = function() return { { id = 77, name = "Lost Guardian", hp = 5, hpm = 10, awake = true, debuffs = {} } } end
 	runTicks(4, 0.3)
 	assert(top()["Lost Guardian"], "a guardian without a row stays on the boss bar")
 	assert(not f.rows[2].bar.shown and not f.rows[3].bar.shown, "bars gone with the guardians")
+	-- and with the boss bar one off it is on neither (the player's choice)
+	click("Guardians on the boss bar")
+	runTicks(4, 0.3)
+	assert(not top()["Lost Guardian"] and top()["Boss C"], "off: no guardians on the boss bar, the bosses stay")
 	AZS_GetGuardians = sg
-	-- the list switched off: the guardians are back on the boss bar (their health is always somewhere)
+	-- the list switched off: no bars, and the boss bar switch is the player's
 	G.SetOpt("guardians", false)
 	runTicks(8, 0.3)
-	assert(not G.GuardianBarsOnList() and top()["Necrofiend"] and not f:IsShown(), "list off: boss bar again")
+	assert(not G.GuardianBarsOnList() and not f:IsShown(), "list off: no bars")
+	G.SetOpt("guardianBoss", true)
+	runTicks(8, 0.3)
+	assert(top()["Necrofiend"], "boss bar switch on: guardians on the boss bar")
 	G.SetOpt("guardians", true)
 	runTicks(8, 0.3)
-	assert(f.rows[2].bar.shown and not top()["Necrofiend"], "list on again: bars again")
+	assert(f.rows[2].bar.shown and top()["Necrofiend"], "list on again: bars again, boss bar as set")
 	-- a stale list (the run before) shows no bars
 	AZS_ZONE_UPDATED = 5; AZS_UNITS_UPDATED = 1
 	runTicks(4, 0.3)
 	AZS_ZONE_UPDATED = nil; AZS_UNITS_UPDATED = nil
-	-- back to the boss bar
-	G.SetOpt("guardianBars", false)
+	-- the switch off again puts the guardians back on the boss bar
+	G.SetOpt("guardianBoss", false)
+	click("Health bars on the list")
 	runTicks(8, 0.3)
+	assert(G.Opt("guardianBars") == false and G.Opt("guardianBoss") == true, "list bars off: boss bar on again")
 	for i = 1, 8 do assert(not f.rows[i].bar.shown, "bars gone, row " .. i) end
 	assert(top()["Necrofiend"] == "guardian" and lastPoint(f.rows[3])[5] == -60 and f:GetHeight() == 24 + 3 * 18 + 4, "plain list again")
 	print("guardian bars ok")
 end)
+
 
 scenario("party barrier", function()
 	local rows = G.party.rows
