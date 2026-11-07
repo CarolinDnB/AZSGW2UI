@@ -91,6 +91,29 @@ end
 
 ------------------------------------------------------------------------ our drawing on a plate
 
+-- A part of the game's plate (its cast bar above all: a hero casts all the time late in a run) that the game shows again
+-- must not be seen even for a moment. Looking at the plates only comes round to a plate after some tenths of a second, so
+-- every part of the game also gets an OnShow script: the moment the game shows it, it is made invisible again, before the
+-- next picture is drawn. (A part the game only makes visible by its alpha is found at the next look.)
+local function HookKid(p, kid)
+	if ( kid.azsKidOf ) then
+		return;
+	end
+	kid.azsKidOf = p;
+	local old = kid:GetScript("OnShow");
+	kid:SetScript("OnShow", function()
+		if ( old ) then
+			old();
+		end
+		local q = this.azsKidOf;
+		if ( q and q.quiet and P.active ) then
+			this:SetAlpha(0);
+			P.brought = ( P.brought or 0 ) + 1;
+			P.lastBrought = G.Plain(tostring(q.rawName)) .. ": " .. tostring(this:GetObjectType()) .. " shown by the game";
+		end
+	end);
+end
+
 -- every part of the game's plate (all its regions and all its frames but ours) gets this alpha
 local function NativeAlpha(p, a)
 	local regs = p.regs;
@@ -103,11 +126,19 @@ local function NativeAlpha(p, a)
 		end
 	end
 	local kids = { p.frame:GetChildren() };
+	local theirs = {};
 	for i = 1, table.getn(kids) do
 		if ( kids[i] ~= p.v ) then
 			kids[i]:SetAlpha(a);
+			if ( kids[i] ~= p.hb ) then
+				table.insert(theirs, kids[i]);                  -- (the health bar is looked at every time on its own)
+			end
+			if ( a == 0 ) then
+				HookKid(p, kids[i]);
+			end
 		end
 	end
+	p.kids = theirs;
 	p.nkids = p.frame:GetNumChildren();
 end
 
@@ -206,9 +237,21 @@ local function Disturbed(p)
 	return p.hb:GetAlpha() > 0;
 end
 
--- did it add a part (its cast bar is made when it is first needed) or bring the cast bar back? (every few looks)
+-- did it add a part (its cast bar is made when it is first needed) or bring one of its other parts back? A few calls for a
+-- plate: every look for friends (the cast bars of heroes are in use all the time), every fourth for enemies.
 local function Stirred(p)
-	return p.frame:GetNumChildren() ~= p.nkids or ( p.cast ~= nil and p.cast:GetAlpha() > 0 );
+	if ( p.frame:GetNumChildren() ~= p.nkids ) then
+		return true;
+	end
+	local kids = p.kids;
+	if ( kids ) then
+		for i = 1, table.getn(kids) do
+			if ( kids[i]:GetAlpha() > 0 ) then
+				return true;
+			end
+		end
+	end
+	return false;
 end
 
 ------------------------------------------------------------------------ what a plate shows
@@ -540,17 +583,15 @@ local function Refresh(p, tname, tkind)
 end
 
 local function Look(p, tname, tkind)
-	if ( p.quiet and Disturbed(p) ) then
+	if ( p.quiet and ( Disturbed(p) or ( ( p.enemy ~= true or math.mod(p.age or 0, 4) == 0 ) and Stirred(p) ) ) ) then
 		p.quiet = false;                                      -- the game made something visible again
+		P.noticed = ( P.noticed or 0 ) + 1;
 	end
 	if ( not p.quiet ) then
 		Requiet(p);
 	end
 	p.age = ( p.age or 0 ) + 1;
 	if ( p.age >= IDENTIFY or not p.rawName ) then
-		if ( p.quiet and Stirred(p) ) then
-			Quiet(p);
-		end
 		Identify(p);
 	end
 	Refresh(p, tname, tkind);
@@ -652,6 +693,8 @@ function G.PlatesReport()
 		end
 	end
 	G.Print("plates found: " .. table.getn(P.list) .. " (" .. shown .. " up), WorldFrame children: " .. WorldFrame:GetNumChildren());
+	G.Print("parts of the game's plates shown by the game and made invisible at once: " .. ( P.brought or 0 ) .. ", found visible at a look: " .. ( P.noticed or 0 )
+		.. ( P.lastBrought and ( "; last at once: " .. P.lastBrought ) or "" ));
 	local dumped = 0;
 	for i = 1, table.getn(P.list) do
 		local p = P.list[i];

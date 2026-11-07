@@ -179,6 +179,7 @@ code here are original.
 ## Changes in 1.9.2
 
 - Co-op: the party, you included, is marked with the game's raid icons when you join a game (this replaces the marks on bosses and guardians). `/gw2 marks` says who has which.
+- Friendly nameplates: a bar of the game's own plate (its cast bar, late in a run) no longer flashes under ours: it is made invisible the moment the game shows it.
 - The "Ally down" alert, the party frame and the guardian list no longer take the clicks meant for the world (a right click in the middle of the screen while a friend was down did nothing).
 
 ## Changes in 1.9.1

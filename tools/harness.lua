@@ -1197,6 +1197,22 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	local late = new("StatusBar", captain.frame)
 	runTicks(40, 0.1)
 	assert(late:GetAlpha() == 0, "a part added later is visible")
+	-- the game shows its cast bar (a hero casts all the time late in a run): invisible at once, with no look in between,
+	-- and the same for a part that was added later
+	for _, part in ipairs({ grunt.cast, late }) do
+		assert(part.scripts.OnShow, "a part of the game's plate has no OnShow hook")
+		for round = 1, 3 do
+			part.shown = true; part:SetAlpha(1)
+			this = part; part.scripts.OnShow()
+			assert(part:GetAlpha() == 0, "a part shown by the game was visible until the next look")
+		end
+	end
+	assert((G.plates.brought or 0) >= 6, "the parts shown by the game were not counted")
+	-- one made visible by its alpha alone is found within a few looks of an enemy plate (every fourth), not after a dozen
+	grunt.cast:SetAlpha(1); late:SetAlpha(1); grunt.name:SetAlpha(1)
+	runTicks(4, 0.1)
+	assert(grunt.cast:GetAlpha() == 0 and late:GetAlpha() == 0, "a part made visible by its alpha stayed visible for more than four looks")
+	assert(G.plates.noticed and G.plates.noticed >= 1)
 	assert(pc.v:GetAlpha() == 1 and pc.bar:GetAlpha() == 1, "our own drawing was made invisible")
 	assert(pc.v.shown and pg.v.shown, "our plates are gone")
 	-- elites and guardians are orange
@@ -1273,6 +1289,20 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	runTicks(14, 0.1)
 	local ph, ph2, pw, pt, ps = hero.frame.azsPlate, hero2.frame.azsPlate, wolf.frame.azsPlate, totem.frame.azsPlate, tree.frame.azsPlate
 	assert(ph.v.shown and ph2.v.shown and pw.v.shown and pt.v.shown and ps.v.shown, "friendly plates are missing with the defaults")
+	-- a hero casts all the time late in a run: the game's cast bar (and a mana bar, if it has one) under a friendly plate is
+	-- hidden at once when the game shows it, and found at the very next look when only its alpha comes back
+	local mana = new("StatusBar", hero.frame)                -- a part the game adds under the plate of a friend
+	runTicks(2, 0.1)
+	assert(mana:GetAlpha() == 0, "a part added under a friendly plate is visible")
+	for round = 1, 4 do
+		hero.cast.shown = true; hero.cast:SetAlpha(1); mana.shown = true; mana:SetAlpha(1)
+		this = hero.cast; hero.cast.scripts.OnShow(); this = mana; mana.scripts.OnShow()
+		assert(hero.cast:GetAlpha() == 0 and mana:GetAlpha() == 0, "a cast / mana bar shown by the game is visible until the next look")
+		hero.cast.shown = false; mana.shown = false
+	end
+	hero.cast:SetAlpha(1); mana:SetAlpha(1)
+	runTicks(1, 0.1)
+	assert(hero.cast:GetAlpha() == 0 and mana:GetAlpha() == 0, "a part under a friendly plate stayed visible for more than one look")
 	-- pets off: only the pets / summons go
 	SlashCmdList["AZSGW2"]("plates pets off")
 	runTicks(8, 0.1)
@@ -1334,6 +1364,9 @@ scenario("nameplates: recycled plates, orange elites, marks, pets and totems", f
 	-- back to nothing
 	G.SetOpt("nameplates", false); G.EnforcePlates(); runTicks(4, 0.1)
 	for _, pl in ipairs({ grunt, captain }) do assert(pl.hb:GetAlpha() == 1, "plates not given back") end
+	-- given back means given back: the hook leaves the game's parts alone now
+	grunt.cast:SetAlpha(1); this = grunt.cast; grunt.cast.scripts.OnShow()
+	assert(grunt.cast:GetAlpha() == 1, "the OnShow hook hides a part of the game's plate with the plates option off")
 	SlashCmdList["AZSGW2"]("plates debug")
 	print("nameplate repairs, orange elites, pets ok")
 end)
