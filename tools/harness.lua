@@ -81,6 +81,16 @@ impl.SetParent = function(self, p) assert(type(p) == "table", "SetParent needs a
 impl.SetMaskTexture = function(self, path) assert(type(path) == "string"); self.mask = path end
 impl.GetNumPoints = function(self) return 1 end
 impl.GetEffectiveScale = function(self) return 1 end
+-- where a frame is on the 1600 x 900 canvas (the layout solver further down; scales are not applied)
+-- (before the solver exists, in the early scenarios: a box of the frame's own size at the corner)
+local function rectOf(self)
+	if HARNESS_RECT then return HARNESS_RECT(self) end
+	return { l = 0, b = 0, w = self.w or 0, h = self.h or 0 }
+end
+impl.GetLeft = function(self) return rectOf(self).l end
+impl.GetBottom = function(self) return rectOf(self).b end
+impl.GetRight = function(self) local r = rectOf(self); return r.l + r.w end
+impl.GetTop = function(self) local r = rectOf(self); return r.b + r.h end
 impl.GetZoom = function(self) return self.zoom or 0 end
 impl.GetZoomLevels = function(self) return 5 end
 impl.SetZoom = function(self, z)
@@ -1843,6 +1853,7 @@ local function R(w)
 	cache[w] = r
 	return r
 end
+function HARNESS_RECT(w) cache = {}; return R(w) end
 local function anchorXY(r, p)
 	local x, y
 	if string.find(p, "LEFT") then x = r.l elseif string.find(p, "RIGHT") then x = r.l + r.w else x = r.l + r.w / 2 end
@@ -1917,6 +1928,118 @@ end
 
 scenario("layout dump (normal)", function()
 	dumpLayout(OUTDIR .. "/layout_normal.txt")
+end)
+
+scenario("unlock: boxes on top of each other, the grid and snapping", function()
+	local function near(a, b) return math.abs(a - b) < 0.0005 end
+	local function onLine(v) return math.abs(v / 20 - math.floor(v / 20 + 0.5)) < 0.0001 end
+	local f = G.settings
+	G.SetUnlocked(false)
+	-- the button: on the row of Unlock layout and Reset positions, right of Reset positions, inside the page
+	assert(f.gridButton and f.gridButton.text.text == "Toggle Grid", "a Toggle Grid button")
+	local up, bp = lastPoint(f.unlock), lastPoint(f.gridButton)
+	assert(bp[5] == up[5] and bp[4] == up[4] + 150 + 8 + 150 + 8, "right of Reset positions on the same row: " .. tostring(bp[4]))
+	assert(bp[4] + f.gridButton:GetWidth() <= 440 - 14, "inside the page")
+	-- with the layout locked the button unlocks it and shows the grid
+	assert(not G.unlocked and not G.gridOn)
+	f.gridButton.scripts.OnClick()
+	assert(G.unlocked and G.gridOn and G.grid.frame.shown, "unlocked, grid on")
+	local grid = G.grid
+	assert(grid.frame.strata == "FULLSCREEN" and not grid.frame.mouseOn, "under the gold boxes and no mouse")
+	local W, H = UIParent:GetWidth(), UIParent:GetHeight()
+	assert(#grid.v == math.floor(W / 20) + 1 and #grid.h == math.floor(H / 20) + 1, "a line every 20: " .. #grid.v .. " x " .. #grid.h)
+	assert(grid.v[1].pts[1][4] == 0 and grid.v[2].pts[1][4] == 20 and grid.v[6].pts[1][4] == 100, "vertical lines every 20")
+	assert(grid.h[3].pts[1][5] == 40 and grid.h[3].pts[1][1] == "BOTTOMLEFT", "horizontal lines every 20")
+	assert(grid.v[6].vc[4] > grid.v[2].vc[4], "every fifth line is stronger")
+	assert(grid.mx.pts[1][1] == "TOP" and grid.my.pts[1][1] == "LEFT", "the middle lines")
+	-- off and on again, the same lines
+	f.gridButton.scripts.OnClick()
+	assert(G.unlocked and not G.gridOn and not grid.frame.shown, "grid off, still unlocked")
+	f.gridButton.scripts.OnClick()
+	assert(G.gridOn and grid.frame.shown and #G.grid.v == #grid.v, "grid on again")
+	-- locking the layout takes the grid away
+	G.SetUnlocked(false)
+	assert(not G.gridOn and not grid.frame.shown, "locked: no grid")
+	SlashCmdList["AZSGW2"]("grid")
+	assert(G.unlocked and G.gridOn, "/gw2 grid")
+	SlashCmdList["AZSGW2"]("grid")
+	assert(G.unlocked and not G.gridOn, "/gw2 grid again")
+	G.SetUnlocked(false)
+
+	-- the small boxes are on top of the big one: the accessories lie inside the skill bar's box
+	G.SetUnlocked(true)
+	local acc, orbM = G.MovableByKey("accessories"), G.MovableByKey("orb")
+	assert(acc and acc.ov and orbM and orbM.ov)
+	local a, o = HARNESS_RECT(acc.ov), HARNESS_RECT(orbM.ov)
+	assert(a.l >= o.l and a.l + a.w <= o.l + o.w and a.b >= o.b and a.b + a.h <= o.b + o.h, "the accessories box lies inside the skill bar's box")
+	for _, m in ipairs(G.movables) do
+		if m ~= orbM then assert(m.ov:GetFrameLevel() > orbM.ov:GetFrameLevel(), m.key .. " is under the skill bar's box") end
+	end
+	assert(acc.ov.grip:GetFrameLevel() > orbM.ov.grip:GetFrameLevel(), "and so is its corner")
+
+	-- snapping: the nearest of the low edge, the middle and the high edge goes on a line
+	assert(near(G.SnapMove(13, 100, 0), -3), "the middle is the nearest: " .. G.SnapMove(13, 100, 0))
+	assert(near(G.SnapMove(2, 100, 0), -2) and near(G.SnapMove(9, 40, 0), -9) and near(G.SnapMove(17, 40, 0), 3) and near(G.SnapMove(20, 40, 0), 0), "other cases")
+	assert(onLine(13 + G.SnapMove(13, 100, 7)) or onLine(13 + 50 + G.SnapMove(13, 100, 7)) or onLine(13 + 100 + G.SnapMove(13, 100, 7)))
+
+	-- dragging: the frame follows the mouse; with Shift one edge or middle lies on a grid line
+	local oldCursor, oldShift = GetCursorPosition, IsShiftKeyDown
+	local function drag(m, x0, y0, x1, y1, shift)
+		GetCursorPosition = function() return x0, y0 end
+		m.ov.scripts.OnDragStart()
+		GetCursorPosition = function() return x1, y1 end
+		IsShiftKeyDown = function() return shift end
+		m.ov.scripts.OnUpdate()
+		local r = HARNESS_RECT(m.ov)
+		return r
+	end
+	local function stop(m) m.ov.scripts.OnDragStop() end
+	local accPoint, orbPoint = { acc.frame:GetPoint() }, { G.orb:GetPoint() }
+	local r0 = HARNESS_RECT(acc.ov)
+	-- the accessories hang off the first skill: the first move anchors them to the screen
+	local r1 = drag(acc, 500, 300, 537, 322, false)
+	assert(near(r1.l, r0.l + 37) and near(r1.b, r0.b + 22), "follows the mouse: " .. (r1.l - r0.l) .. ", " .. (r1.b - r0.b))
+	local p = lastPoint(acc.frame)
+	assert(p[1] == "BOTTOMLEFT" and p[2] == UIParent and p[3] == "BOTTOMLEFT", "anchored to the screen")
+	assert(acc.ov.scripts.OnUpdate, "an update runs while dragging")
+	stop(acc)
+	assert(acc.ov.scripts.OnUpdate == nil, "and stops with it")
+	local saved = AZSGW2DB.pos.accessories
+	assert(saved and saved[1] == "BOTTOMLEFT" and near(saved[3], p[4]) and near(saved[4], p[5]), "the place is saved")
+	-- now from the screen anchor, with Shift
+	local r2 = drag(acc, 500, 300, 521, 311, true)
+	local xs, ys = { r2.l, r2.l + r2.w / 2, r2.l + r2.w }, { r2.b, r2.b + r2.h / 2, r2.b + r2.h }
+	local okx, oky = false, false
+	for i = 1, 3 do okx = okx or onLine(xs[i]); oky = oky or onLine(ys[i]) end
+	assert(okx and oky, "with Shift an edge or the middle is on a line: " .. r2.l .. "," .. r2.b)
+	stop(acc)
+	-- without Shift it does not snap
+	local r3 = drag(acc, 500, 300, 507, 303, false)
+	local r3x = HARNESS_RECT(acc.ov)
+	stop(acc)
+	assert(near(r3.l - r3x.l, 0), "(same box)")
+	-- a frame that hangs off the screen keeps its anchor
+	local ob = lastPoint(G.orb)
+	local q0x, q0y = ob[4], ob[5]
+	drag(orbM, 500, 300, 510, 320, false)
+	local q = lastPoint(G.orb)
+	assert(q[1] == ob[1] and q[2] == UIParent and near(q[4], q0x + 10) and near(q[5], q0y + 20), "the skill bar keeps its anchor and moves by the mouse: " .. tostring(q[4]) .. "," .. tostring(q[5]))
+	stop(orbM)
+	-- a drag that ends with the box hidden does not leave an update running
+	GetCursorPosition = function() return 500, 300 end
+	orbM.ov.scripts.OnDragStart()
+	assert(orbM.ov.scripts.OnUpdate)
+	orbM.ov.scripts.OnHide()
+	assert(orbM.ov.scripts.OnUpdate == nil, "hidden: no update")
+	GetCursorPosition, IsShiftKeyDown = oldCursor, oldShift
+
+	-- everything back as it was
+	AZSGW2DB.pos.accessories = nil; AZSGW2DB.pos.orb = nil
+	acc.frame:ClearAllPoints(); acc.frame:SetPoint(accPoint[1], accPoint[2], accPoint[3], accPoint[4], accPoint[5])
+	G.orb:ClearAllPoints(); G.orb:SetPoint(orbPoint[1], orbPoint[2], orbPoint[3], orbPoint[4], orbPoint[5])
+	G.SetUnlocked(false)
+	f:Hide()
+	print("unlock: layering, grid, snapping ok")
 end)
 
 scenario("damage preview dump", function()

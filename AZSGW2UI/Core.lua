@@ -773,7 +773,7 @@ local function LockBar()
 		return G.lockBar;
 	end
 	local b = CreateFrame("Button", "AZSGW2LockBar", UIParent);
-	b:SetWidth(440);
+	b:SetWidth(540);
 	b:SetHeight(38);
 	b:SetPoint("TOP", UIParent, "TOP", 0, -8);
 	b:SetFrameStrata("FULLSCREEN_DIALOG");
@@ -789,13 +789,170 @@ local function LockBar()
 	local t2 = G.Text(b, 9, "CENTER");
 	t2:SetPoint("BOTTOM", b, "BOTTOM", 0, 5);
 	t2:SetTextColor(0.75, 0.75, 0.75);
-	t2:SetText("drag a gold box = move   |   its corner or the mouse wheel = size   |   right click = reset its size");
+	t2:SetText("drag a gold box = move (hold Shift = snap to the grid)   |   its corner or the mouse wheel = size   |   right click = reset its size");
 	b:SetScript("OnClick", function()
 		G.ToggleUnlock();
 	end);
 	b:Hide();
 	G.lockBar = b;
 	return b;
+end
+
+------------------------------------------------------------------------ the grid and dragging a box
+
+-- The grid: a thin line every GRIDSTEP units (UIParent's own units, from the lower left), a little brighter on every fifth and gold
+-- through the middle of the screen. It only exists while the layout is unlocked, takes no mouse and lies under the gold boxes.
+G.GRIDSTEP = 20;
+
+local function GridLine(grid, list, i)
+	local t = list[i];
+	if ( not t ) then
+		t = G.Solid(grid.frame, "OVERLAY", 1, 1, 1, 1);          -- the line's strength is its vertex colour's alpha
+		list[i] = t;
+	end
+	return t;
+end
+
+function G.LayoutGrid()
+	local grid = G.grid;
+	local w, h = UIParent:GetWidth() or 0, UIParent:GetHeight() or 0;
+	if ( not grid or w <= 0 or h <= 0 or ( grid.sw == w and grid.sh == h ) ) then
+		return;
+	end
+	grid.sw, grid.sh = w, h;                 -- the size the lines were laid out for
+	local step = G.GRIDSTEP;
+	local nv, nh = math.floor(w / step), math.floor(h / step);
+	for i = 0, nv do
+		local t = GridLine(grid, grid.v, i + 1);
+		local major = ( i - math.floor(i / 5) * 5 ) == 0;
+		t:SetVertexColor(1, 1, 1, major and 0.30 or 0.14);
+		t:ClearAllPoints();
+		t:SetPoint("TOPLEFT", grid.frame, "TOPLEFT", i * step, 0);
+		t:SetPoint("BOTTOMLEFT", grid.frame, "BOTTOMLEFT", i * step, 0);
+		t:SetWidth(1);
+		t:Show();
+	end
+	for i = nv + 2, table.getn(grid.v) do
+		grid.v[i]:Hide();
+	end
+	for j = 0, nh do
+		local t = GridLine(grid, grid.h, j + 1);
+		local major = ( j - math.floor(j / 5) * 5 ) == 0;
+		t:SetVertexColor(1, 1, 1, major and 0.30 or 0.14);
+		t:ClearAllPoints();
+		t:SetPoint("BOTTOMLEFT", grid.frame, "BOTTOMLEFT", 0, j * step);
+		t:SetPoint("BOTTOMRIGHT", grid.frame, "BOTTOMRIGHT", 0, j * step);
+		t:SetHeight(1);
+		t:Show();
+	end
+	for j = nh + 2, table.getn(grid.h) do
+		grid.h[j]:Hide();
+	end
+	-- the middle of the screen, in gold
+	grid.mx:ClearAllPoints();
+	grid.mx:SetPoint("TOP", grid.frame, "TOP", 0, 0);
+	grid.mx:SetPoint("BOTTOM", grid.frame, "BOTTOM", 0, 0);
+	grid.mx:SetWidth(1);
+	grid.my:ClearAllPoints();
+	grid.my:SetPoint("LEFT", grid.frame, "LEFT", 0, 0);
+	grid.my:SetPoint("RIGHT", grid.frame, "RIGHT", 0, 0);
+	grid.my:SetHeight(1);
+end
+
+function G.SetGrid(on)
+	on = on and G.unlocked and true or false;
+	G.gridOn = on;
+	if ( on and not G.grid ) then
+		local f = CreateFrame("Frame", "AZSGW2Grid", UIParent);
+		f.azs = true;
+		f:SetAllPoints(UIParent);
+		f:SetFrameStrata("FULLSCREEN");
+		f:EnableMouse(false);
+		G.grid = { frame = f, v = {}, h = {} };
+		G.grid.mx = G.Solid(f, "OVERLAY", G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 0.55);
+		G.grid.my = G.Solid(f, "OVERLAY", G.GOLDLIGHT[1], G.GOLDLIGHT[2], G.GOLDLIGHT[3], 0.55);
+		f:Hide();
+	end
+	if ( G.grid ) then
+		if ( on ) then
+			G.LayoutGrid();
+			G.grid.frame:Show();
+		else
+			G.grid.frame:Hide();
+		end
+	end
+end
+
+-- a frame's box in UIParent's units: left, bottom, width, height (nil when it is not laid out yet)
+local function BoxOf(frame)
+	local l, b, r, t = frame:GetLeft(), frame:GetBottom(), frame:GetRight(), frame:GetTop();
+	if ( not l or not b or not r or not t ) then
+		return nil;
+	end
+	local k = ( frame:GetEffectiveScale() or 1 ) / ( UIParent:GetEffectiveScale() or 1 );
+	return l * k, b * k, ( r - l ) * k, ( t - b ) * k;
+end
+
+-- `d`: how far the box is to move along one axis, `low`: its low edge now, `size`: its width or height. Of its low edge, its
+-- middle and its high edge the one that ends up nearest to a grid line is put on that line; the new `d` comes back.
+function G.SnapMove(low, size, d)
+	local step = G.GRIDSTEP;
+	local best, bestAbs = 0, nil;
+	for i = 0, 2 do
+		local v = low + d + size * i / 2;
+		local adj = math.floor(v / step + 0.5) * step - v;
+		if ( not bestAbs or math.abs(adj) < bestAbs ) then
+			best, bestAbs = adj, math.abs(adj);
+		end
+	end
+	return d + best;
+end
+
+-- Dragging a gold box moves its frame with the mouse. With Shift held the box snaps to the grid (see SnapMove), whether the
+-- grid is shown or not. A frame that hangs off UIParent keeps its anchor and only its offsets change; one that hangs off another
+-- frame (the accessories, at first) is anchored to the lower left of the screen from then on, as the game's own moving does.
+local function DragStart(m)
+	local f, ov = m.frame, m.ov;
+	local k = ( f:GetEffectiveScale() or 1 ) / ( UIParent:GetEffectiveScale() or 1 );       -- the frame's units -> UIParent's
+	local point, rel, relPoint, x, y = f:GetPoint();
+	local d = {};
+	if ( point and rel == UIParent and type(x) == "number" and type(y) == "number" ) then
+		d.point, d.relPoint, d.x, d.y = point, relPoint or point, x, y;
+	else
+		local fl, fb = BoxOf(f);
+		if ( not fl ) then
+			m.engineMove = true;                    -- not laid out: the game moves it
+			f:StartMoving();
+			return;
+		end
+		d.point, d.relPoint, d.x, d.y = "BOTTOMLEFT", "BOTTOMLEFT", fl / k, fb / k;
+	end
+	m.engineMove = nil;
+	d.cx, d.cy = GetCursorPosition();
+	local l, b, w, h = BoxOf(ov);                   -- the box the player sees, which is what snaps
+	d.l, d.b, d.w, d.h = l, b, w, h;
+	m.drag = d;
+	ov:SetScript("OnUpdate", function()
+		local mx, my = GetCursorPosition();
+		local ui = UIParent:GetEffectiveScale() or 1;
+		local dx, dy = ( mx - d.cx ) / ui, ( my - d.cy ) / ui;                 -- how far the mouse went, in UIParent's units
+		if ( d.l and IsShiftKeyDown() ) then
+			dx = G.SnapMove(d.l, d.w, dx);
+			dy = G.SnapMove(d.b, d.h, dy);
+		end
+		f:ClearAllPoints();
+		f:SetPoint(d.point, UIParent, d.relPoint, d.x + dx / k, d.y + dy / k);
+	end);
+end
+
+local function DragStop(m)
+	m.ov:SetScript("OnUpdate", nil);
+	if ( m.engineMove ) then
+		m.engineMove = nil;
+		m.frame:StopMovingOrSizing();
+	end
+	m.drag = nil;
+	G.SavePos(m);
 end
 
 function G.SetUnlocked(on)
@@ -805,12 +962,17 @@ function G.SetUnlocked(on)
 	elseif ( G.lockBar ) then
 		G.lockBar:Hide();
 	end
+	if ( not on ) then
+		G.SetGrid(false);                       -- the grid belongs to the unlocked layout
+	end
 	for i = 1, table.getn(G.movables) do
 		local m = G.movables[i];
 		if ( on and not m.ov ) then
 			local ov = CreateFrame("Frame", nil, UIParent);
 			ov.azs = true;
 			ov:SetFrameStrata("FULLSCREEN_DIALOG");
+			-- A box that holds other boxes (the skill bar) lies under them: the small ones are on top, so the mouse reaches them.
+			ov:SetFrameLevel(( m.tl and m.br ) and 10 or 20);
 			if ( m.tl and m.br ) then
 				ov:SetPoint("TOPLEFT", m.tl, "TOPLEFT", -4, 4);
 				ov:SetPoint("BOTTOMRIGHT", m.br, "BOTTOMRIGHT", 4, -4);
@@ -885,11 +1047,13 @@ function G.SetUnlocked(on)
 			end);
 			ov.grip = grip;
 			ov:SetScript("OnDragStart", function()
-				m.frame:StartMoving();
+				DragStart(m);
 			end);
 			ov:SetScript("OnDragStop", function()
-				m.frame:StopMovingOrSizing();
-				G.SavePos(m);
+				DragStop(m);
+			end);
+			ov:SetScript("OnHide", function()
+				ov:SetScript("OnUpdate", nil);
 			end);
 			m.ov = ov;
 		end

@@ -1,5 +1,16 @@
 # AZS GW2 UI: Changelog
 
+## 2.0.1
+
+A hotfix for the unlocked layout.
+
+**New**
+- **Toggle Grid** (Interface, to the right of *Reset positions*; also `/gw2 grid`). It puts a grid over the screen (a line every 20 units, a stronger one on every fifth, gold through the middle of the screen). The grid belongs to the unlocked layout: the button unlocks the layout too if it is locked, and locking the layout takes the grid away.
+- **Snap to grid.** Hold **Shift** while you drag a gold box: of the box's left, middle and right line the one nearest to a grid line is put on that line, and the same for its bottom, middle and top. It works with or without the grid shown. The lock bar at the top says so.
+
+**Fixed**
+- **The Accessories box could not be moved.** Its gold box lay inside the Skill bar's gold box, which took the mouse. Boxes that hold other boxes lie below them now, so the small ones can be grabbed. (The first move of the Accessories box anchors it to the screen, so it stays where you put it.)
+
 ## 2.0.0
 
 A bigger update: a new settings window, a new place for the accessories, the summons and the resource bar at the bottom of the screen, and two separate switches for the health of guardians.

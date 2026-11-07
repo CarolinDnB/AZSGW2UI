@@ -263,12 +263,15 @@ local function BuildLayout(f, panel)
 	NewButton(panel, "Reset positions", 150, "TOPLEFT", 172, -SECHEAD - 36 - 2, function()
 		G.ResetPositions();
 	end);
+	f.gridButton = NewButton(panel, "Toggle Grid", 96, "TOPLEFT", 330, -SECHEAD - 36 - 2, function()
+		G.ToggleGrid();
+	end);
 	local hint = G.Text(panel, 9, "LEFT");
 	hint:SetPoint("TOPLEFT", panel, "TOPLEFT", 14, -SECHEAD - 36 - 32);
 	hint:SetWidth(PAGEW - 28);
 	hint:SetHeight(24);
 	hint:SetTextColor(0.65, 0.65, 0.68);
-	hint:SetText("Unlocked: drag a gold box to move it, its corner or the mouse wheel to resize it, right click puts its size back.");
+	hint:SetText("Unlocked: drag a gold box to move it (hold Shift to snap it to the grid), its corner or the mouse wheel to resize it, right click puts its size back.");
 	f.hint = hint;
 end
 
@@ -472,6 +475,19 @@ function G.ToggleUnlock()
 	G.SetUnlocked(not G.unlocked);
 	G.RefreshSettings();
 	G.Print(G.unlocked and "layout unlocked: drag the gold boxes, then lock again." or "layout locked.");
+end
+
+-- the grid lies over the screen while the layout is unlocked; with the layout locked the button unlocks it too
+function G.ToggleGrid()
+	if ( not G.unlocked ) then
+		G.SetUnlocked(true);
+		G.SetGrid(true);
+		G.RefreshSettings();
+		G.Print("layout unlocked, grid on: hold Shift while you drag a gold box to snap it to the grid.");
+		return;
+	end
+	G.SetGrid(not G.gridOn);
+	G.Print(G.gridOn and "grid on: hold Shift while you drag a gold box to snap it to the grid." or "grid off.");
 end
 
 function G.ResetPositions()

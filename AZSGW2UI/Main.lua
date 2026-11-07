@@ -307,6 +307,7 @@ local function Help()
 	G.Print("commands:");
 	G.Print("/gw2 config : settings window (also: left click the round icon at the minimap)");
 	G.Print("/gw2 unlock | lock : move and resize every frame freely (a bar at the top locks it again)");
+	G.Print("/gw2 grid : a grid over the screen while unlocked (hold Shift while dragging to snap to it)");
 	G.Print("/gw2 off | on : give the game's own HUD back / use this one");
 	G.Print("/gw2 scale <0.6-1.6> : size of everything");
 	G.Print("/gw2 reset : forget moved windows");
@@ -612,6 +613,8 @@ function G.Slash(msg)
 		G.SetUnlocked(cmd == "unlock");
 		G.RefreshSettings();
 		G.Print("layout " .. ( G.unlocked and "unlocked: drag the gold boxes, /gw2 lock when done." or "locked." ));
+	elseif ( cmd == "grid" ) then
+		G.ToggleGrid();
 	elseif ( cmd == "mapyards" ) then
 		local y = tonumber(rest);
 		if ( rest == "off" ) then

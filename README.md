@@ -66,13 +66,14 @@ the chat ("hid the game's own popup (name)"). That search is small on purpose: o
 
 ## Settings and moving things
 
-Click the round icon at the minimap (or `/gw2 config`): a window in the style of the hero panel, with a list of pages on the left and the switches of the chosen page on the right. The pages are *Interface* (target bar, party frames, hero panel, accessories, size, "Unlock layout", "Reset positions"), *Nameplates* (enemies, friends), *Damage* (damage numbers, damage meter), *Map & Guardians* (minimap, caches and guardians on it, guardian list, direction arrows, health bars on the list, guardians on the boss bar) and *Utility* (co-op alerts and marks, max targets on the skills, the game's centre-screen messages).
-Unlocked, every frame gets a gold box with its name and size: drag it to move it, drag its corner (or use the mouse wheel) to make just that part bigger or smaller, right click puts its size back. A bar at the top of the screen locks the layout again. "Size" in the settings is still the size of everything at once; the single sizes are on top of it. Parts that belong together (the orb and its skill bar, for example) resize together.
+Click the round icon at the minimap (or `/gw2 config`): a window in the style of the hero panel, with a list of pages on the left and the switches of the chosen page on the right. The pages are *Interface* (target bar, party frames, hero panel, accessories, size, "Unlock layout", "Reset positions", "Toggle Grid"), *Nameplates* (enemies, friends), *Damage* (damage numbers, damage meter), *Map & Guardians* (minimap, caches and guardians on it, guardian list, direction arrows, health bars on the list, guardians on the boss bar) and *Utility* (co-op alerts and marks, max targets on the skills, the game's centre-screen messages).
+Unlocked, every frame gets a gold box with its name and size: drag it to move it, drag its corner (or use the mouse wheel) to make just that part bigger or smaller, right click puts its size back. A bar at the top of the screen locks the layout again. *Toggle Grid* (next to "Reset positions", or `/gw2 grid`) shows a grid over the screen while the layout is unlocked, and holding **Shift** while you drag a box snaps it to the grid (its left, middle or right line, and its bottom, middle or top line, whichever is nearest to a grid line; the box can be snapped without the grid shown, too). "Size" in the settings is still the size of everything at once; the single sizes are on top of it. Parts that belong together (the orb and its skill bar, for example) resize together.
 
 ## Commands
 
     /gw2 config                       settings window
     /gw2 unlock | lock                move frames freely / lock them
+    /gw2 grid                         grid over the screen while unlocked (Shift + drag snaps to it)
     /gw2 off | on                     game HUD back / this UI
     /gw2 scale 0.6-1.6                size of everything
     /gw2 reset                        forget moved frames (reloads)
@@ -175,6 +176,11 @@ load it, the game's own font is used.
 This is a fan made interface for Azeroth Survivors. It is not affiliated with or endorsed by ArenaNet, NCSOFT or Blizzard;
 "Guild Wars" is a trademark of ArenaNet / NCSOFT. The layout is inspired by Guild Wars 2's interface; all textures, icons and
 code here are original.
+
+## Changes in 2.0.1
+
+- The Accessories box can be moved again: it lay under the Skill bar's gold box in the unlocked layout, which caught the mouse. Small boxes are on top of big ones now.
+- New button *Toggle Grid* next to "Reset positions" (also `/gw2 grid`): a grid over the screen while the layout is unlocked. Hold Shift while you drag a gold box to snap it to the grid.
 
 ## Changes in 2.0.0
 
